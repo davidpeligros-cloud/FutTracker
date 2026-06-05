@@ -21,6 +21,11 @@ export default {
     android: {
       package: 'com.futbollive.app',
     },
+    extra: {
+      eas: {
+        projectId: 'd03b5b27-0cdb-41a1-875a-83e614bba296',
+      },
+    },
     plugins: [
       'expo-dev-client',
       [
