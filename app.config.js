@@ -5,6 +5,7 @@ export default {
   expo: {
     name: 'FutbolLive',
     slug: 'futbol-live-app',
+    owner: 'peligros_jrr',
     version: '1.0.0',
     orientation: 'portrait',
     platforms: ['ios', 'android'],
