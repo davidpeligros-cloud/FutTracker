@@ -6,6 +6,8 @@ const IOS_REVENUECAT_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY || '';
 const ANDROID_REVENUECAT_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY || '';
 const IOS_BANNER_ID = process.env.EXPO_PUBLIC_ADMOB_IOS_BANNER_ID || '';
 const ANDROID_BANNER_ID = process.env.EXPO_PUBLIC_ADMOB_ANDROID_BANNER_ID || '';
+const IOS_INTERSTITIAL_ID = process.env.EXPO_PUBLIC_ADMOB_IOS_INTERSTITIAL_ID || '';
+const ANDROID_INTERSTITIAL_ID = process.env.EXPO_PUBLIC_ADMOB_ANDROID_INTERSTITIAL_ID || '';
 const IOS_REWARDED_ID = process.env.EXPO_PUBLIC_ADMOB_IOS_REWARDED_ID || '';
 const ANDROID_REWARDED_ID = process.env.EXPO_PUBLIC_ADMOB_ANDROID_REWARDED_ID || '';
 
@@ -40,7 +42,11 @@ const getRevenueCatKey = () => (Platform.OS === 'ios' ? IOS_REVENUECAT_KEY : AND
 export const getMonetizationMode = () => {
   const hasRevenueCatKey = Boolean(getRevenueCatKey());
   const hasNativeAdsModule = Boolean(NativeModules.RNGoogleMobileAdsModule);
-  const hasAdMobIds = Boolean(Platform.OS === 'ios' ? IOS_BANNER_ID || IOS_REWARDED_ID : ANDROID_BANNER_ID || ANDROID_REWARDED_ID);
+  const hasAdMobIds = Boolean(
+    Platform.OS === 'ios'
+      ? IOS_BANNER_ID || IOS_INTERSTITIAL_ID || IOS_REWARDED_ID
+      : ANDROID_BANNER_ID || ANDROID_INTERSTITIAL_ID || ANDROID_REWARDED_ID
+  );
   return {
     revenueCat: hasRevenueCatKey ? 'live' : 'demo',
     ads: hasNativeAdsModule ? (hasAdMobIds ? 'live' : 'test') : 'expo-go',
@@ -65,6 +71,12 @@ export const initializeMonetization = async () => {
   const ads = getAdsModule();
   if (ads?.default) {
     try {
+      await ads.default().setRequestConfiguration?.({
+        maxAdContentRating: ads.MaxAdContentRating?.T || 'T',
+        tagForChildDirectedTreatment: false,
+        tagForUnderAgeOfConsent: false,
+        testDeviceIdentifiers: __DEV__ ? ['EMULATOR'] : [],
+      });
       await ads.default().initialize();
     } catch (error) {
       mode.ads = 'unavailable';
@@ -142,6 +154,36 @@ const getRewardedUnitId = () => {
   return Platform.OS === 'ios' ? IOS_REWARDED_ID || testId : ANDROID_REWARDED_ID || testId;
 };
 
+const getInterstitialUnitId = () => {
+  const ads = getAdsModule();
+  const testId = ads?.TestIds?.INTERSTITIAL || 'ca-app-pub-3940256099942544/1033173712';
+  if (__DEV__) return testId;
+  return Platform.OS === 'ios' ? IOS_INTERSTITIAL_ID || testId : ANDROID_INTERSTITIAL_ID || testId;
+};
+
+export const showInterstitialAd = () =>
+  new Promise((resolve) => {
+    const ads = getAdsModule();
+    if (!ads?.InterstitialAd || !ads?.AdEventType) {
+      resolve({ shown: false, demo: true });
+      return;
+    }
+
+    const interstitial = ads.InterstitialAd.createForAdRequest(getInterstitialUnitId());
+
+    const unsubscribeLoaded = interstitial.addAdEventListener(ads.AdEventType.LOADED, () => {
+      interstitial.show();
+    });
+
+    const unsubscribeClosed = interstitial.addAdEventListener(ads.AdEventType.CLOSED, () => {
+      unsubscribeLoaded();
+      unsubscribeClosed();
+      resolve({ shown: true });
+    });
+
+    interstitial.load();
+  });
+
 export const showRewardedAd = () =>
   new Promise((resolve) => {
     const ads = getAdsModule();
@@ -186,7 +228,7 @@ export function NativeAdSlot({ style }) {
   if (!BannerAd || !BannerAdSize) {
     return (
       <View style={style}>
-        <Text style={{ color: '#8e9bb1', fontSize: 12 }}>Anuncio listo para development build</Text>
+        <Text style={{ color: '#8e9bb1', fontSize: 10, fontWeight: '700' }}>AD</Text>
       </View>
     );
   }

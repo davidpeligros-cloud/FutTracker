@@ -1,7 +1,6 @@
 ﻿import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
-  SafeAreaView,
   ScrollView,
   View,
   Text,
@@ -16,12 +15,14 @@ import {
   Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   NativeAdSlot,
   getSubscriptionStatus,
   initializeMonetization,
   purchasePremiumPlan,
   restorePremiumPurchases,
+  showInterstitialAd,
   showRewardedAd,
 } from './services/monetization';
 
@@ -43,15 +44,15 @@ const COLORS = {
 };
 
 const LEAGUES = [
-  { id: 'fifa.world', label: 'Mundial 2026', icon: 'ðŸ†' },
-  { id: 'eng.1', label: 'Premier League', icon: 'ðŸ´' },
-  { id: 'esp.1', label: 'La Liga', icon: 'ðŸ‡ªðŸ‡¸' },
-  { id: 'ger.1', label: 'Bundesliga', icon: 'ðŸ‡©ðŸ‡ª' },
-  { id: 'ita.1', label: 'Serie A', icon: 'ðŸ‡®ðŸ‡¹' },
-  { id: 'fra.1', label: 'Ligue 1', icon: 'ðŸ‡«ðŸ‡·' },
-  { id: 'usa.1', label: 'MLS', icon: 'ðŸ‡ºðŸ‡¸' },
-  { id: 'mex.1', label: 'Liga MX', icon: 'ðŸ‡²ðŸ‡½' },
-  { id: 'uefa.champions', label: 'Champions', icon: 'â­' },
+  { id: 'fifa.world', label: 'Mundial 2026', icon: '🏆' },
+  { id: 'eng.1', label: 'Premier League', icon: '🏴' },
+  { id: 'esp.1', label: 'La Liga', icon: '🇪🇸' },
+  { id: 'ger.1', label: 'Bundesliga', icon: '🇩🇪' },
+  { id: 'ita.1', label: 'Serie A', icon: '🇮🇹' },
+  { id: 'fra.1', label: 'Ligue 1', icon: '🇫🇷' },
+  { id: 'usa.1', label: 'MLS', icon: '🇺🇸' },
+  { id: 'mex.1', label: 'Liga MX', icon: '🇲🇽' },
+  { id: 'uefa.champions', label: 'Champions', icon: '⭐' },
 ];
 
 const API_BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
@@ -60,10 +61,12 @@ const DEFAULT_FREE_LIMITS = {
   aiDaily: 3,
   notifications: 3,
 };
+const INTERSTITIAL_COOLDOWN_MS = 45000;
+const AD_BREAK_INTERVAL = 3;
 const PREMIUM_PLANS = [
   { id: 'monthly', label: 'Mensual', price: '6,99', accent: 'Popular', description: 'Ideal para probar el valor premium durante una temporada.' },
-  { id: 'annual', label: 'Anual', price: '44,99', accent: 'Mejor valor', description: 'La opciÃ³n inteligente para usuarios fieles durante todo el aÃ±o.' },
-  { id: 'lifetime', label: 'Lifetime', price: '119,99', accent: 'Lanzamiento', description: 'Oferta limitada para los primeros usuarios.' },
+  { id: 'annual', label: 'Anual', price: '44,99', accent: 'Mejor valor', description: 'La opción inteligente para usuarios fieles durante todo el año.' },
+  { id: 'lifetime', label: 'De por vida', price: '119,99', accent: 'Lanzamiento', description: 'Oferta limitada para los primeros usuarios.' },
 ];
 const ALERT_TYPES = [
   { id: 'goal', label: 'Gol', priority: 'high' },
@@ -72,7 +75,7 @@ const ALERT_TYPES = [
   { id: 'start', label: 'Inicio', priority: 'high' },
   { id: 'half', label: 'Descanso', priority: 'high' },
   { id: 'final', label: 'Final', priority: 'high' },
-  { id: 'injury', label: 'Lesion', priority: 'medium' },
+  { id: 'injury', label: 'Lesión', priority: 'medium' },
   { id: 'transfer', label: 'Fichaje', priority: 'medium' },
   { id: 'callup', label: 'Convocatoria', priority: 'medium' },
   { id: 'streak', label: 'Racha', priority: 'low' },
@@ -83,8 +86,8 @@ const DEFAULT_PROFILE = {
   onboardingDone: false,
   favoriteTeam: 'Real Madrid',
   favoriteLeague: 'fifa.world',
-  favoriteSelection: 'Spain',
-  favoritePlayer: 'Vinicius Jr.',
+  favoriteSelection: 'España',
+  favoritePlayer: 'Vinícius Jr.',
   alertTypes: ['goal', 'red', 'start', 'final'],
   preferredHour: 'evening',
   detailLevel: 'premium',
@@ -98,6 +101,27 @@ const DEFAULT_ENTITLEMENTS = {
   hasSeenPaywall: false,
   notificationsEnabled: true,
 };
+
+const normalizeSavedProfile = (savedProfile = {}) => ({
+  ...DEFAULT_PROFILE,
+  ...savedProfile,
+  favoriteSelection: {
+    Spain: 'España',
+    Brazil: 'Brasil',
+    France: 'Francia',
+    England: 'Inglaterra',
+    Germany: 'Alemania',
+    Mexico: 'México',
+  }[savedProfile.favoriteSelection] || savedProfile.favoriteSelection || DEFAULT_PROFILE.favoriteSelection,
+  favoritePlayer: savedProfile.favoritePlayer === 'Vinicius Jr.' ? 'Vinícius Jr.' : savedProfile.favoritePlayer || DEFAULT_PROFILE.favoritePlayer,
+});
+
+const normalizeSavedEntitlements = (savedEntitlements = {}) => ({
+  ...DEFAULT_ENTITLEMENTS,
+  ...savedEntitlements,
+  coins: savedEntitlements.coins ?? savedEntitlements.monedas ?? DEFAULT_ENTITLEMENTS.coins,
+});
+
 const TEAM_FOCUS = [
   'Real Madrid',
   'Barcelona',
@@ -110,42 +134,42 @@ const TEAM_FOCUS = [
   'Inter',
   'Juventus',
 ];
-const SELECTION_OPTIONS = ['Spain', 'Brazil', 'Argentina', 'France', 'England', 'Portugal', 'Germany', 'Mexico'];
+const SELECTION_OPTIONS = ['España', 'Brasil', 'Argentina', 'Francia', 'Inglaterra', 'Portugal', 'Alemania', 'México'];
 
 const TEAM_VISUALS = {
-  arsenal: { flag: 'ðŸ´', primary: '#ef0107', secondary: '#ffffff' },
-  barcelona: { flag: 'ðŸ‡ªðŸ‡¸', primary: '#a50044', secondary: '#004d98' },
-  'bayern munich': { flag: 'ðŸ‡©ðŸ‡ª', primary: '#dc052d', secondary: '#0066b2' },
-  'borussia dortmund': { flag: 'ðŸ‡©ðŸ‡ª', primary: '#fde100', secondary: '#000000' },
-  chelsea: { flag: 'ðŸ´', primary: '#034694', secondary: '#ffffff' },
-  france: { flag: 'ðŸ‡«ðŸ‡·', primary: '#002395', secondary: '#ed2939' },
-  germany: { flag: 'ðŸ‡©ðŸ‡ª', primary: '#000000', secondary: '#dd0000' },
-  inter: { flag: 'ðŸ‡®ðŸ‡¹', primary: '#0068a8', secondary: '#000000' },
-  italy: { flag: 'ðŸ‡®ðŸ‡¹', primary: '#0066cc', secondary: '#ffffff' },
-  juventus: { flag: 'ðŸ‡®ðŸ‡¹', primary: '#000000', secondary: '#ffffff' },
-  liverpool: { flag: 'ðŸ´', primary: '#c8102e', secondary: '#00b2a9' },
-  'manchester city': { flag: 'ðŸ´', primary: '#6cabdd', secondary: '#1c2c5b' },
-  'manchester united': { flag: 'ðŸ´', primary: '#da291c', secondary: '#fbe122' },
-  mexico: { flag: 'ðŸ‡²ðŸ‡½', primary: '#006847', secondary: '#ce1126' },
-  psg: { flag: 'ðŸ‡«ðŸ‡·', primary: '#004170', secondary: '#da291c' },
-  'paris saint-germain': { flag: 'ðŸ‡«ðŸ‡·', primary: '#004170', secondary: '#da291c' },
-  portugal: { flag: 'ðŸ‡µðŸ‡¹', primary: '#006600', secondary: '#ff0000' },
-  'real madrid': { flag: 'ðŸ‡ªðŸ‡¸', primary: '#febd11', secondary: '#ffffff' },
-  spain: { flag: 'ðŸ‡ªðŸ‡¸', primary: '#aa151b', secondary: '#f1bf00' },
-  england: { flag: 'ðŸ´', primary: '#ffffff', secondary: '#cf142b' },
-  'south africa': { flag: 'ðŸ‡¿ðŸ‡¦', primary: '#007a4d', secondary: '#ffb612' },
-  'corea del sur': { flag: 'ðŸ‡°ðŸ‡·', primary: '#c60c30', secondary: '#003478' },
-  'south korea': { flag: 'ðŸ‡°ðŸ‡·', primary: '#c60c30', secondary: '#003478' },
-  chequia: { flag: 'ðŸ‡¨ðŸ‡¿', primary: '#11457e', secondary: '#d7141a' },
-  czechia: { flag: 'ðŸ‡¨ðŸ‡¿', primary: '#11457e', secondary: '#d7141a' },
-  usa: { flag: 'ðŸ‡ºðŸ‡¸', primary: '#3c3b6e', secondary: '#b22234' },
-  'united states': { flag: 'ðŸ‡ºðŸ‡¸', primary: '#3c3b6e', secondary: '#b22234' },
+  arsenal: { flag: '🏴', primary: '#ef0107', secondary: '#ffffff' },
+  barcelona: { flag: '🇪🇸', primary: '#a50044', secondary: '#004d98' },
+  'bayern munich': { flag: '🇩🇪', primary: '#dc052d', secondary: '#0066b2' },
+  'borussia dortmund': { flag: '🇩🇪', primary: '#fde100', secondary: '#000000' },
+  chelsea: { flag: '🏴', primary: '#034694', secondary: '#ffffff' },
+  france: { flag: '🇫🇷', primary: '#002395', secondary: '#ed2939' },
+  germany: { flag: '🇩🇪', primary: '#000000', secondary: '#dd0000' },
+  inter: { flag: '🇮🇹', primary: '#0068a8', secondary: '#000000' },
+  italy: { flag: '🇮🇹', primary: '#0066cc', secondary: '#ffffff' },
+  juventus: { flag: '🇮🇹', primary: '#000000', secondary: '#ffffff' },
+  liverpool: { flag: '🏴', primary: '#c8102e', secondary: '#00b2a9' },
+  'manchester city': { flag: '🏴', primary: '#6cabdd', secondary: '#1c2c5b' },
+  'manchester united': { flag: '🏴', primary: '#da291c', secondary: '#fbe122' },
+  mexico: { flag: '🇲🇽', primary: '#006847', secondary: '#ce1126' },
+  psg: { flag: '🇫🇷', primary: '#004170', secondary: '#da291c' },
+  'paris saint-germain': { flag: '🇫🇷', primary: '#004170', secondary: '#da291c' },
+  portugal: { flag: '🇵🇹', primary: '#006600', secondary: '#ff0000' },
+  'real madrid': { flag: '🇪🇸', primary: '#febd11', secondary: '#ffffff' },
+  spain: { flag: '🇪🇸', primary: '#aa151b', secondary: '#f1bf00' },
+  england: { flag: '🏴', primary: '#ffffff', secondary: '#cf142b' },
+  'south africa': { flag: '🇿🇦', primary: '#007a4d', secondary: '#ffb612' },
+  'corea del sur': { flag: '🇰🇷', primary: '#c60c30', secondary: '#003478' },
+  'south korea': { flag: '🇰🇷', primary: '#c60c30', secondary: '#003478' },
+  chequia: { flag: '🇨🇿', primary: '#11457e', secondary: '#d7141a' },
+  czechia: { flag: '🇨🇿', primary: '#11457e', secondary: '#d7141a' },
+  usa: { flag: '🇺🇸', primary: '#3c3b6e', secondary: '#b22234' },
+  'united states': { flag: '🇺🇸', primary: '#3c3b6e', secondary: '#b22234' },
 };
 
 const FALLBACK_PLAYERS = [
-  { id: 1, name: 'VinÃ­cius Jr.', team: 'Real Madrid', pos: 'EX', age: 23, goals: 22, assists: 14, mins: 2700, rating: 8.6, yellow: 3, red: 0 },
+  { id: 1, name: 'Vinícius Jr.', team: 'Real Madrid', pos: 'EX', age: 23, goals: 22, assists: 14, mins: 2700, rating: 8.6, yellow: 3, red: 0 },
   { id: 2, name: 'Robert Lewandowski', team: 'Barcelona', pos: 'DC', age: 35, goals: 28, assists: 7, mins: 2650, rating: 8.4, yellow: 1, red: 0 },
-  { id: 3, name: 'Kylian MbappÃ©', team: 'Real Madrid', pos: 'DC', age: 25, goals: 31, assists: 10, mins: 2800, rating: 8.9, yellow: 2, red: 0 },
+  { id: 3, name: 'Kylian Mbappé', team: 'Real Madrid', pos: 'DC', age: 25, goals: 31, assists: 10, mins: 2800, rating: 8.9, yellow: 2, red: 0 },
   { id: 4, name: 'Erling Haaland', team: 'Man City', pos: 'DC', age: 23, goals: 35, assists: 5, mins: 2750, rating: 9.1, yellow: 2, red: 0 },
   { id: 5, name: 'Pedri', team: 'Barcelona', pos: 'MC', age: 22, goals: 9, assists: 18, mins: 2580, rating: 8.5, yellow: 4, red: 0 },
 ];
@@ -274,6 +298,40 @@ function AdBanner({ title, subtitle, cta, onPress }) {
   );
 }
 
+function AdBreak({ placement, onPress }) {
+  const copy = {
+    feed: {
+      title: 'Patrocinado',
+      subtitle: 'Gratis gracias a anuncios',
+    },
+    match: {
+      title: 'Ad break',
+      subtitle: 'Premium quita pausas',
+    },
+    premium: {
+      title: 'Sin anuncios',
+      subtitle: 'Desbloquea Premium',
+    },
+  }[placement] || {
+    title: 'Patrocinado',
+    subtitle: 'Contenido gratuito',
+  };
+
+  return (
+    <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={styles.adBreak}>
+      <View style={styles.adBreakLeft}>
+        <Text style={styles.adBreakBadge}>AD</Text>
+        <View style={styles.adBreakTextWrap}>
+          <Text style={styles.adBreakTitle}>{copy.title}</Text>
+          <Text style={styles.adBreakSubtitle}>{copy.subtitle}</Text>
+        </View>
+      </View>
+      <NativeAdSlot style={styles.nativeAdSlotCompact} />
+      <Text style={styles.adBreakAction}>Premium</Text>
+    </TouchableOpacity>
+  );
+}
+
 function PlanCard({ plan, onPress, highlight, disabled }) {
   return (
     <TouchableOpacity
@@ -358,7 +416,7 @@ function MatchCard({ match, onPress }) {
         {match.live ? (
           <View style={styles.liveInfo}>
             <LiveDot />
-            <Text style={styles.liveInfoText}>EN DIRECTO Â· {match.minute || ''}</Text>
+            <Text style={styles.liveInfoText}>EN DIRECTO · {match.minute || ''}</Text>
           </View>
         ) : (
           <Text style={styles.matchTime}>{match.time}</Text>
@@ -463,19 +521,19 @@ function PlayerCard({ player, selected, onPress, inSquad, onToggleSquad, squadDi
       <View style={styles.playerHeader}>
         <View>
           <Text style={styles.playerName}>{player.name}</Text>
-          <Text style={styles.playerMeta}>{player.team} Â· {player.pos}</Text>
+          <Text style={styles.playerMeta}>{player.team} · {player.pos}</Text>
         </View>
         <Text style={styles.playerRating}>{player.rating}</Text>
       </View>
       {selected && (
         <View style={styles.playerStatsGrid}>
           {[
-            ['âš½ Goles', player.goals],
-            ['ðŸ…°ï¸ Asist.', player.assists],
-            ['â± Minutos', player.mins],
-            ['ðŸŸ¨ Amarillas', player.yellow],
-            ['ðŸŸ¥ Rojas', player.red],
-            ['ðŸŽ‚ Edad', player.age],
+            ['⚽ Goles', player.goals],
+            ['🅰️ Asist.', player.assists],
+            ['⏱ Minutos', player.mins],
+            ['🟨 Amarillas', player.yellow],
+            ['🟥 Rojas', player.red],
+            ['🎂 Edad', player.age],
           ].map(([label, value]) => (
             <View key={label} style={styles.playerStatBox}>
               <Text style={styles.playerStatLabel}>{label}</Text>
@@ -496,7 +554,7 @@ function PlayerCard({ player, selected, onPress, inSquad, onToggleSquad, squadDi
           ]}
         >
           <Text style={[styles.squadToggleText, inSquad && styles.squadToggleTextActive]}>
-            {inSquad ? 'Quitar de Mi XI' : `AÃ±adir Â· ${getPlayerCost(player)}M`}
+            {inSquad ? 'Quitar de Mi XI' : `Añadir · ${getPlayerCost(player)}M`}
           </Text>
         </TouchableOpacity>
       )}
@@ -520,18 +578,18 @@ function SearchBar({ value, onChange }) {
 }
 
 const MAIN_NAV = [
-  { id: 'home', label: 'Inicio', icon: 'âŒ‚' },
-  { id: 'live', label: 'En directo', icon: 'â—' },
-  { id: 'explore', label: 'Explorar', icon: 'âŒ•' },
-  { id: 'squad', label: 'Mi XI', icon: 'â˜…' },
-  { id: 'profile', label: 'Perfil', icon: 'â—Œ' },
+  { id: 'home', label: 'Inicio', icon: '⌂' },
+  { id: 'live', label: 'En directo', icon: '●' },
+  { id: 'explore', label: 'Explorar', icon: '⌕' },
+  { id: 'squad', label: 'Mi XI', icon: '★' },
+  { id: 'profile', label: 'Perfil', icon: '◌' },
 ];
 
 const EXPLORE_TABS = [
-  { id: 'schedule', label: 'Horarios', icon: 'ðŸ“…' },
-  { id: 'teams', label: 'Equipos', icon: 'ðŸŸï¸' },
-  { id: 'players', label: 'Jugadores', icon: 'ðŸ‘¤' },
-  { id: 'competitions', label: 'Competiciones', icon: 'ðŸ†' },
+  { id: 'schedule', label: 'Horarios', icon: '📅' },
+  { id: 'teams', label: 'Equipos', icon: '🏟️' },
+  { id: 'players', label: 'Jugadores', icon: '👤' },
+  { id: 'competitions', label: 'Competiciones', icon: '🏆' },
 ];
 
 function formatMatchTime(dateString) {
@@ -714,6 +772,7 @@ export default function App() {
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [adLoading, setAdLoading] = useState(false);
   const contentAnim = useRef(new Animated.Value(1)).current;
+  const lastInterstitialAt = useRef(0);
 
   useEffect(() => {
     const hydrate = async () => {
@@ -721,8 +780,8 @@ export default function App() {
         const stored = await AsyncStorage.getItem(STORAGE_KEY);
         if (stored) {
           const parsed = JSON.parse(stored);
-          if (parsed.profile) setProfile({ ...DEFAULT_PROFILE, ...parsed.profile });
-          if (parsed.entitlements) setEntitlements({ ...DEFAULT_ENTITLEMENTS, ...parsed.entitlements });
+          if (parsed.profile) setProfile(normalizeSavedProfile(parsed.profile));
+          if (parsed.entitlements) setEntitlements(normalizeSavedEntitlements(parsed.entitlements));
           if (Array.isArray(parsed.squadIds)) setSquadIds(parsed.squadIds);
           if (parsed.captainId) setCaptainId(parsed.captainId);
           if (parsed.activeNav) setActiveNav(parsed.activeNav);
@@ -915,7 +974,25 @@ export default function App() {
     setShowOnboarding(false);
   };
 
+  const maybeShowInterstitial = async (placement = 'navigation') => {
+    if (isPremium) return;
+
+    const now = Date.now();
+    if (now - lastInterstitialAt.current < INTERSTITIAL_COOLDOWN_MS) return;
+
+    lastInterstitialAt.current = now;
+    await showInterstitialAd(placement);
+  };
+
+  const switchNav = (nextNav) => {
+    if (nextNav !== activeNav) {
+      maybeShowInterstitial('navigation');
+    }
+    setActiveNav(nextNav);
+  };
+
   const handleMatchPress = (match) => {
+    maybeShowInterstitial('match');
     setSelectedMatch(match);
     setMatchDetail(null);
     setLoadingDetail(true);
@@ -1068,17 +1145,18 @@ export default function App() {
   const featuredHomeMatch = favoriteMatches[0] || liveMatches[0] || scheduledMatches[0] || null;
   const homeCommunityStory = liveMatches[0]
     ? `${liveMatches[0].home} presiona con intensidad frente a ${liveMatches[0].away}.`
-    : `Tu XI estÃ¡ listo para la jornada y la comunidad ya estÃ¡ comentando ${profile.favoriteTeam}.`;
+    : `Tu XI está listo para la jornada y la comunidad ya está comentando ${profile.favoriteTeam}.`;
 
   return (
+    <SafeAreaProvider>
     <SafeAreaView style={styles.safe}>
       <StatusBar style="light" />
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.brand}>âš½ <Text style={styles.brandAccent}>FÃºtbol</Text>Live</Text>
+            <Text style={styles.brand}>⚽ <Text style={styles.brandAccent}>Fútbol</Text>Live</Text>
             <Text style={styles.headerSubtitle}>
-              {liveMatches.length} partidos en directo{lastUpdated ? ` Â· Act. ${lastUpdated}` : ''}
+              {liveMatches.length} partidos en directo{lastUpdated ? ` · Act. ${lastUpdated}` : ''}
             </Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -1087,7 +1165,7 @@ export default function App() {
               style={styles.refreshButton}
               activeOpacity={0.7}
             >
-              <Text style={styles.refreshButtonText}>ðŸ”„</Text>
+              <Text style={styles.refreshButtonText}>↻</Text>
             </TouchableOpacity>
             <View style={styles.liveBadge}>
               <View style={styles.liveBadgeDot} />
@@ -1162,17 +1240,17 @@ export default function App() {
                   <View>
                     <Text style={styles.homeEyebrow}>Tu futbol, a tu ritmo</Text>
                     <Text style={styles.homeTitle}>{profile.favoriteTeam}</Text>
-                    <Text style={styles.homeSubtitle}>{favoriteLeague.label} Â· {profile.favoritePlayer}</Text>
+                    <Text style={styles.homeSubtitle}>{favoriteLeague.label} · {profile.favoritePlayer}</Text>
                   </View>
                   <View style={styles.homeHeroBadge}>
                     <Text style={styles.homeHeroBadgeValue}>{entitlements.coins}</Text>
-                    <Text style={styles.homeHeroBadgeLabel}>coins</Text>
+                    <Text style={styles.homeHeroBadgeLabel}>monedas</Text>
                   </View>
                 </View>
                 <View style={styles.homeGrid}>
                   <StatTile label="Mi XI" value={`${squadPlayers.length}/${SQUAD_LIMIT}`} tone="accent" />
                   <StatTile label="Puntos" value={`${squadPoints}`} tone="gold" />
-                  <StatTile label="IA" value={isPremium ? 'Unlimited' : `${aiUsesLeft} uses`} />
+                  <StatTile label="IA" value={isPremium ? 'Ilimitada' : `${aiUsesLeft} usos`} />
                   <StatTile label="Alertas" value={`${profile.alertTypes.length}`} />
                 </View>
                 {featuredHomeMatch ? (
@@ -1197,11 +1275,17 @@ export default function App() {
                     onPress={() => openPaywall('home')}
                   />
                 )}
+                {!isPremium && <AdBreak placement="feed" onPress={() => openPaywall('home-ad-break')} />}
+                {!isPremium && (
+                  <TouchableOpacity onPress={() => claimRewardedAd('coins')} disabled={adLoading} activeOpacity={0.8} style={[styles.rewardButton, adLoading && styles.planCardDisabled]}>
+                    <Text style={styles.rewardButtonText}>{adLoading ? 'Cargando anuncio...' : 'Ver anuncio y ganar 25 monedas'}</Text>
+                  </TouchableOpacity>
+                )}
                 <View style={styles.homeActionRow}>
-                  <TouchableOpacity activeOpacity={0.8} onPress={() => setActiveNav('squad')} style={styles.homeAction}>
+                  <TouchableOpacity activeOpacity={0.8} onPress={() => switchNav('squad')} style={styles.homeAction}>
                     <Text style={styles.homeActionText}>Abrir Mi XI</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity activeOpacity={0.8} onPress={() => setActiveNav('explore')} style={styles.homeActionSecondary}>
+                  <TouchableOpacity activeOpacity={0.8} onPress={() => switchNav('explore')} style={styles.homeActionSecondary}>
                     <Text style={styles.homeActionText}>Explorar</Text>
                   </TouchableOpacity>
                 </View>
@@ -1210,22 +1294,39 @@ export default function App() {
 
             {activeNav === 'live' && (
               <View>
-                <Text style={styles.sectionTitle}>PARTIDOS EN DIRECTO Â· {leagueTitle}</Text>
+                <Text style={styles.sectionTitle}>PARTIDOS EN DIRECTO · {leagueTitle}</Text>
                 <View style={styles.cardStack}>
-                  {liveMatches.length > 0 ? liveMatches.map((match) => <MatchCard key={match.id} match={match} onPress={() => handleMatchPress(match)} />) : <Text style={styles.emptyText}>No hay partidos en directo ahora mismo.</Text>}
+                  {liveMatches.length > 0 ? liveMatches.map((match, index) => (
+                    <View key={match.id}>
+                      <MatchCard match={match} onPress={() => handleMatchPress(match)} />
+                      {!isPremium && (index + 1) % AD_BREAK_INTERVAL === 0 && <AdBreak placement="match" onPress={() => openPaywall('live-list')} />}
+                    </View>
+                  )) : <Text style={styles.emptyText}>No hay partidos en directo ahora mismo.</Text>}
                 </View>
-                <Text style={styles.sectionTitle}>PRÃ“XIMOS PARTIDOS</Text>
+                {!isPremium && <AdBreak placement="premium" onPress={() => openPaywall('live-between-sections')} />}
+                <Text style={styles.sectionTitle}>PRÓXIMOS PARTIDOS</Text>
                 <View style={styles.cardStack}>
-                  {scheduledMatches.length > 0 ? scheduledMatches.slice(0, 4).map((match) => <MatchCard key={match.id} match={match} onPress={() => handleMatchPress(match)} />) : <Text style={styles.emptyText}>No hay prÃ³ximos partidos disponibles.</Text>}
+                  {scheduledMatches.length > 0 ? scheduledMatches.slice(0, 8).map((match, index) => (
+                    <View key={match.id}>
+                      <MatchCard match={match} onPress={() => handleMatchPress(match)} />
+                      {!isPremium && (index + 1) % 2 === 0 && <AdBreak placement="feed" onPress={() => openPaywall('scheduled-list')} />}
+                    </View>
+                  )) : <Text style={styles.emptyText}>No hay próximos partidos disponibles.</Text>}
                 </View>
               </View>
             )}
 
             {activeNav === 'explore' && exploreTab === 'schedule' && (
               <View>
-                <Text style={styles.sectionTitle}>CALENDARIO Â· {leagueTitle}</Text>
+                <Text style={styles.sectionTitle}>CALENDARIO · {leagueTitle}</Text>
+                {!isPremium && <AdBreak placement="feed" onPress={() => openPaywall('schedule-top')} />}
                 <View style={styles.cardStack}>
-                  {matches.length > 0 ? matches.map((match) => <MatchCard key={match.id} match={match} onPress={() => handleMatchPress(match)} />) : <Text style={styles.emptyText}>No hay partidos en el calendario.</Text>}
+                  {matches.length > 0 ? matches.map((match, index) => (
+                    <View key={match.id}>
+                      <MatchCard match={match} onPress={() => handleMatchPress(match)} />
+                      {!isPremium && (index + 1) % AD_BREAK_INTERVAL === 0 && <AdBreak placement="feed" onPress={() => openPaywall('schedule-list')} />}
+                    </View>
+                  )) : <Text style={styles.emptyText}>No hay partidos en el calendario.</Text>}
                 </View>
               </View>
             )}
@@ -1236,7 +1337,7 @@ export default function App() {
                 {!isPremium && (
                   <AdBanner
                     title="Mejora tu experiencia"
-                    subtitle="Comparadores avanzados, widgets y estadÃ­sticas profundas viven detrÃ¡s de Premium."
+                    subtitle="Comparadores avanzados, widgets y estadísticas profundas viven detrás de Premium."
                     cta="Desbloquear"
                     onPress={() => openPaywall('teams')}
                   />
@@ -1247,13 +1348,15 @@ export default function App() {
                   ))}
                 </View>
                 <View style={styles.cardStack}>
-                  {filteredTeams.length > 0 ? filteredTeams.map((team) => (
-                    <TeamRow
-                      key={team.id}
-                      team={team}
-                      selected={selectedTeam?.id === team.id}
-                      onPress={() => setSelectedTeam(selectedTeam?.id === team.id ? null : team)}
-                    />
+                  {filteredTeams.length > 0 ? filteredTeams.map((team, index) => (
+                    <View key={team.id}>
+                      <TeamRow
+                        team={team}
+                        selected={selectedTeam?.id === team.id}
+                        onPress={() => setSelectedTeam(selectedTeam?.id === team.id ? null : team)}
+                      />
+                      {!isPremium && (index + 1) % AD_BREAK_INTERVAL === 0 && <AdBreak placement="feed" onPress={() => openPaywall('teams-list')} />}
+                    </View>
                   )) : <Text style={styles.emptyText}>No se encontraron equipos.</Text>}
                 </View>
                 <TeamDetail team={selectedTeam} />
@@ -1266,22 +1369,24 @@ export default function App() {
                 {!isPremium && (
                   <AdBanner
                     title="Explora sin anuncios"
-                    subtitle="MantÃ©n los directos limpios y desbloquea xG, heatmaps y alertas ultra rÃ¡pidas con Premium."
+                    subtitle="Mantén los directos limpios y desbloquea xG, heatmaps y alertas ultra rápidas con Premium."
                     cta="Ver Premium"
                     onPress={() => openPaywall('schedule')}
                   />
                 )}
                 <View style={styles.cardStack}>
-                  {filteredPlayers.length > 0 ? filteredPlayers.map((player) => (
-                    <PlayerCard
-                      key={player.id}
-                      player={player}
-                      selected={selectedPlayer?.id === player.id}
-                      onPress={() => setSelectedPlayer(selectedPlayer?.id === player.id ? null : player)}
-                      inSquad={squadIds.includes(player.id)}
-                      onToggleSquad={toggleSquadPlayer}
-                      squadDisabled={squadIds.length >= SQUAD_LIMIT || budgetLeft < getPlayerCost(player)}
-                    />
+                  {filteredPlayers.length > 0 ? filteredPlayers.map((player, index) => (
+                    <View key={player.id}>
+                      <PlayerCard
+                        player={player}
+                        selected={selectedPlayer?.id === player.id}
+                        onPress={() => setSelectedPlayer(selectedPlayer?.id === player.id ? null : player)}
+                        inSquad={squadIds.includes(player.id)}
+                        onToggleSquad={toggleSquadPlayer}
+                        squadDisabled={squadIds.length >= SQUAD_LIMIT || budgetLeft < getPlayerCost(player)}
+                      />
+                      {!isPremium && (index + 1) % AD_BREAK_INTERVAL === 0 && <AdBreak placement="feed" onPress={() => openPaywall('players-list')} />}
+                    </View>
                   )) : <Text style={styles.emptyText}>No se encontraron jugadores.</Text>}
                 </View>
               </View>
@@ -1291,14 +1396,17 @@ export default function App() {
               <View>
                 <Text style={styles.sectionTitle}>COMPETICIONES</Text>
                 <View style={styles.cardStack}>
-                  {LEAGUES.map((league) => (
-                    <TouchableOpacity key={league.id} activeOpacity={0.8} onPress={() => setSelectedLeague(league.id)} style={styles.competitionCard}>
-                      <Text style={styles.competitionIcon}>{league.icon}</Text>
-                      <View style={styles.competitionContent}>
-                        <Text style={styles.competitionTitle}>{league.label}</Text>
-                        <Text style={styles.competitionMeta}>{league.id}</Text>
-                      </View>
-                    </TouchableOpacity>
+                  {LEAGUES.map((league, index) => (
+                    <View key={league.id}>
+                      <TouchableOpacity activeOpacity={0.8} onPress={() => { maybeShowInterstitial('league'); setSelectedLeague(league.id); }} style={styles.competitionCard}>
+                        <Text style={styles.competitionIcon}>{league.icon}</Text>
+                        <View style={styles.competitionContent}>
+                          <Text style={styles.competitionTitle}>{league.label}</Text>
+                          <Text style={styles.competitionMeta}>{league.id}</Text>
+                        </View>
+                      </TouchableOpacity>
+                      {!isPremium && (index + 1) % AD_BREAK_INTERVAL === 0 && <AdBreak placement="feed" onPress={() => openPaywall('competitions-list')} />}
+                    </View>
                   ))}
                 </View>
               </View>
@@ -1306,7 +1414,7 @@ export default function App() {
 
             {activeNav === 'squad' && (
               <View>
-                <Text style={styles.sectionTitle}>MI XI Â· {leagueTitle}</Text>
+                <Text style={styles.sectionTitle}>MI XI · {leagueTitle}</Text>
                 <View style={styles.squadSummaryCard}>
                   <View style={styles.squadSummaryRow}>
                     <View style={styles.squadSummaryItem}>
@@ -1327,11 +1435,13 @@ export default function App() {
                   </View>
                 </View>
 
+                {!isPremium && <AdBreak placement="premium" onPress={() => openPaywall('squad-top')} />}
+
                 {squadPlayers.length === 0 ? (
                   <View style={styles.squadEmptyCard}>
                     <Text style={styles.squadEmptyTitle}>Construye tu once</Text>
-                    <Text style={styles.squadEmptyText}>Ve a Jugadores y aÃ±ade hasta 11 nombres sin pasar de 100M.</Text>
-                    <TouchableOpacity onPress={() => setActiveNav('explore')} activeOpacity={0.8} style={styles.squadPrimaryButton}>
+                    <Text style={styles.squadEmptyText}>Ve a Jugadores y añade hasta 11 nombres sin pasar de 100M.</Text>
+                    <TouchableOpacity onPress={() => switchNav('explore')} activeOpacity={0.8} style={styles.squadPrimaryButton}>
                       <Text style={styles.squadPrimaryButtonText}>Elegir jugadores</Text>
                     </TouchableOpacity>
                   </View>
@@ -1340,23 +1450,26 @@ export default function App() {
                     {squadPlayers.map((player, index) => {
                       const isCaptain = captainId === player.id;
                       return (
-                        <View key={player.id} style={[styles.squadPlayerRow, isCaptain && styles.squadPlayerRowCaptain]}>
-                          <View style={styles.squadPlayerRank}>
-                            <Text style={styles.squadPlayerRankText}>{index + 1}</Text>
+                        <View key={player.id}>
+                          <View style={[styles.squadPlayerRow, isCaptain && styles.squadPlayerRowCaptain]}>
+                            <View style={styles.squadPlayerRank}>
+                              <Text style={styles.squadPlayerRankText}>{index + 1}</Text>
+                            </View>
+                            <View style={styles.squadPlayerInfo}>
+                              <Text style={styles.squadPlayerName}>{player.name}</Text>
+                              <Text style={styles.squadPlayerMeta}>{player.team} · {player.pos} · {getPlayerCost(player)}M</Text>
+                            </View>
+                            <View style={styles.squadPlayerActions}>
+                              <TouchableOpacity onPress={() => setCaptainId(player.id)} activeOpacity={0.8} style={[styles.captainButton, isCaptain && styles.captainButtonActive]}>
+                                <Text style={[styles.captainButtonText, isCaptain && styles.captainButtonTextActive]}>{isCaptain ? 'C' : 'Cap.'}</Text>
+                              </TouchableOpacity>
+                              <Text style={styles.squadPoints}>{getPlayerProjection(player, captainId)}</Text>
+                              <TouchableOpacity onPress={() => toggleSquadPlayer(player)} activeOpacity={0.8} style={styles.removeSquadButton}>
+                                <Text style={styles.removeSquadButtonText}>×</Text>
+                              </TouchableOpacity>
+                            </View>
                           </View>
-                          <View style={styles.squadPlayerInfo}>
-                            <Text style={styles.squadPlayerName}>{player.name}</Text>
-                            <Text style={styles.squadPlayerMeta}>{player.team} Â· {player.pos} Â· {getPlayerCost(player)}M</Text>
-                          </View>
-                          <View style={styles.squadPlayerActions}>
-                            <TouchableOpacity onPress={() => setCaptainId(player.id)} activeOpacity={0.8} style={[styles.captainButton, isCaptain && styles.captainButtonActive]}>
-                              <Text style={[styles.captainButtonText, isCaptain && styles.captainButtonTextActive]}>{isCaptain ? 'C' : 'Cap.'}</Text>
-                            </TouchableOpacity>
-                            <Text style={styles.squadPoints}>{getPlayerProjection(player, captainId)}</Text>
-                            <TouchableOpacity onPress={() => toggleSquadPlayer(player)} activeOpacity={0.8} style={styles.removeSquadButton}>
-                              <Text style={styles.removeSquadButtonText}>Ã—</Text>
-                            </TouchableOpacity>
-                          </View>
+                          {!isPremium && (index + 1) % 2 === 0 && <AdBreak placement="feed" onPress={() => openPaywall('squad-list')} />}
                         </View>
                       );
                     })}
@@ -1369,14 +1482,16 @@ export default function App() {
                 <View style={styles.profileHero}>
                   <Text style={styles.sectionTitle}>PERFIL</Text>
                   <Text style={styles.profileTitle}>{profile.favoriteTeam}</Text>
-                  <Text style={styles.profileSubtitle}>{favoriteLeague.label} Â· {profile.favoritePlayer}</Text>
+                  <Text style={styles.profileSubtitle}>{favoriteLeague.label} · {profile.favoritePlayer}</Text>
                 </View>
 
                 <View style={styles.profileStatsRow}>
                   <StatTile label="Monedas" value={`${entitlements.coins}`} />
                   <StatTile label="Plan" value={entitlements.premiumPlan || 'Gratis'} tone={isPremium ? 'gold' : 'neutral'} />
-                  <StatTile label="IA" value={isPremium ? 'Unlimited' : `${aiUsesLeft} uses`} />
+                  <StatTile label="IA" value={isPremium ? 'Ilimitada' : `${aiUsesLeft} usos`} />
                 </View>
+
+                {!isPremium && <AdBreak placement="premium" onPress={() => openPaywall('profile-top')} />}
 
                 <View style={styles.profileCard}>
                   <Text style={styles.profileSectionTitle}>Favoritos</Text>
@@ -1409,8 +1524,8 @@ export default function App() {
                   </View>
                 </View>
 
-                <TouchableOpacity activeOpacity={0.8} onPress={() => claimRewardedAd('coins')} style={styles.rewardButton}>
-                  <Text style={styles.rewardButtonText}>Ver anuncio y ganar monedas</Text>
+                <TouchableOpacity activeOpacity={0.8} onPress={() => claimRewardedAd('coins')} disabled={adLoading} style={[styles.rewardButton, adLoading && styles.planCardDisabled]}>
+                  <Text style={styles.rewardButtonText}>{adLoading ? 'Cargando anuncio...' : 'Ver anuncio y ganar monedas'}</Text>
                 </TouchableOpacity>
 
                 {!isPremium && (
@@ -1429,7 +1544,7 @@ export default function App() {
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, styles.onboardingModal]}>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.onboardingScroll}>
-              <Text style={styles.onboardingKicker}>Configuraci?n inicial</Text>
+              <Text style={styles.onboardingKicker}>Configuración inicial</Text>
               <Text style={styles.onboardingTitle}>Personaliza tu futbol</Text>
               <Text style={styles.onboardingSubtitle}>Cinco pasos y la home ya se adapta a ti.</Text>
 
@@ -1461,7 +1576,7 @@ export default function App() {
 
               {onboardingStep === 2 && (
                 <View style={styles.onboardingCard}>
-                  <Text style={styles.onboardingStepTitle}>Selecci?n favorita</Text>
+                  <Text style={styles.onboardingStepTitle}>Selección favorita</Text>
                   <View style={styles.choiceWrap}>
                     {SELECTION_OPTIONS.map((selection) => (
                       <ChoiceChip key={selection} label={selection} selected={profile.favoriteSelection === selection} onPress={() => setProfile((current) => ({ ...current, favoriteSelection: selection }))} />
@@ -1578,7 +1693,7 @@ export default function App() {
         {MAIN_NAV.map((item) => (
           <TouchableOpacity
             key={item.id}
-            onPress={() => setActiveNav(item.id)}
+            onPress={() => switchNav(item.id)}
             activeOpacity={0.85}
             style={[styles.bottomNavButton, activeNav === item.id && styles.bottomNavButtonActive]}
           >
@@ -1599,14 +1714,14 @@ export default function App() {
             <View style={styles.modalHeader}>
               <Text style={styles.modalLeagueTitle}>{selectedMatch?.league?.toUpperCase()}</Text>
               <TouchableOpacity onPress={() => setSelectedMatch(null)} style={styles.closeButton}>
-                <Text style={styles.closeButtonText}>âœ•</Text>
+                <Text style={styles.closeButtonText}>✕</Text>
               </TouchableOpacity>
             </View>
 
             {loadingDetail && (
               <View style={styles.modalLoaderContainer}>
                 <ActivityIndicator size="large" color={COLORS.accent} />
-                <Text style={styles.modalLoaderText}>Cargando estadÃ­sticas en vivo...</Text>
+                <Text style={styles.modalLoaderText}>Cargando estadísticas en vivo...</Text>
               </View>
             )}
 
@@ -1629,7 +1744,7 @@ export default function App() {
                       {selectedMatch?.live || matchDetail?.header?.competitions?.[0]?.status?.type?.completed ? `${selectedMatch?.homeScore} - ${selectedMatch?.awayScore}` : 'vs'}
                     </Text>
                     {selectedMatch?.live && (
-                      <Text style={styles.modalLiveIndicator}>EN DIRECTO Â· {selectedMatch?.minute}</Text>
+                      <Text style={styles.modalLiveIndicator}>EN DIRECTO · {selectedMatch?.minute}</Text>
                     )}
                     {!selectedMatch?.live && matchDetail?.header?.competitions?.[0]?.status?.type?.completed && (
                       <Text style={styles.modalFinishedText}>FINALIZADO</Text>
@@ -1659,7 +1774,7 @@ export default function App() {
                         }
                         return eventsToShow.map((event) => {
                           const isHome = event.team?.id === matchDetail?.header?.competitions?.[0]?.competitors?.find(c => c.homeAway === 'home')?.id;
-                          const icon = event.type?.text?.toLowerCase().includes('red') ? 'ðŸŸ¥' : event.type?.text?.toLowerCase().includes('yellow') ? 'ðŸŸ¨' : 'âš½';
+                          const icon = event.type?.text?.toLowerCase().includes('red') ? '🟥' : event.type?.text?.toLowerCase().includes('yellow') ? '🟨' : '⚽';
                           return (
                             <View key={event.id} style={[styles.timelineRow, isHome ? styles.timelineRowHome : styles.timelineRowAway]}>
                               <Text style={styles.timelineClock}>{event.clock?.displayValue || event.clock?.value + "'"}</Text>
@@ -1678,7 +1793,7 @@ export default function App() {
                 {/* Match Statistics */}
                 {matchDetail?.boxscore?.teams && matchDetail.boxscore.teams.length === 2 && (
                   <View style={styles.modalSection}>
-                    <Text style={styles.modalSectionTitle}>ESTADÃSTICAS COMPARATIVAS</Text>
+                    <Text style={styles.modalSectionTitle}>ESTADÍSTICAS COMPARATIVAS</Text>
                     <View style={styles.statsContainer}>
                       {(() => {
                         const teamH = matchDetail.boxscore.teams[0];
@@ -1687,7 +1802,7 @@ export default function App() {
                         const parseStatVal = (valStr) => parseFloat(valStr.replace('%', '')) || 0;
 
                         const statsToCompare = [
-                          { label: 'PosesiÃ³n', key: 'possessionPct', max: 100 },
+                          { label: 'Posesión', key: 'possessionPct', max: 100 },
                           { label: 'Remates Totales', key: 'totalShots', max: 30 },
                           { label: 'Remates al Arco', key: 'shotsOnTarget', max: 15 },
                           { label: 'Tiros de Esquina', key: 'wonCorners', max: 15 },
@@ -1743,7 +1858,7 @@ export default function App() {
                       )}
                       {matchDetail.gameInfo.referee && (
                         <View style={styles.infoDetailRow}>
-                          <Text style={styles.infoDetailLabel}>Ãrbitro:</Text>
+                          <Text style={styles.infoDetailLabel}>Árbitro:</Text>
                           <Text style={styles.infoDetailValue}>{matchDetail.gameInfo.referee.displayName}</Text>
                         </View>
                       )}
@@ -1756,6 +1871,7 @@ export default function App() {
         </View>
       </Modal>
     </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
@@ -2476,9 +2592,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#151b27',
     borderColor: COLORS.cardBorder,
     borderWidth: 1,
-    borderRadius: 22,
-    padding: 18,
-    marginTop: 14,
+    borderRadius: 18,
+    padding: 14,
+    marginTop: 10,
   },
   adMark: {
     alignSelf: 'flex-start',
@@ -2495,7 +2611,7 @@ const styles = StyleSheet.create({
   },
   adTitle: {
     color: COLORS.text,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '900',
   },
   adSubtitle: {
@@ -2506,7 +2622,7 @@ const styles = StyleSheet.create({
   },
   nativeAdSlot: {
     marginTop: 12,
-    minHeight: 54,
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.surface,
@@ -2515,8 +2631,65 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: 'hidden',
   },
+  nativeAdSlotCompact: {
+    width: 76,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.surface,
+    borderColor: COLORS.cardBorder,
+    borderWidth: 1,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  adBreak: {
+    minHeight: 54,
+    backgroundColor: '#101722',
+    borderColor: '#253044',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  adBreakLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  adBreakBadge: {
+    color: COLORS.gold,
+    backgroundColor: '#2b2616',
+    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    fontSize: 10,
+    fontWeight: '900',
+    overflow: 'hidden',
+  },
+  adBreakTextWrap: {
+    flex: 1,
+  },
+  adBreakTitle: {
+    color: COLORS.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  adBreakSubtitle: {
+    color: COLORS.muted,
+    fontSize: 10,
+    marginTop: 2,
+  },
+  adBreakAction: {
+    color: COLORS.accent,
+    fontSize: 10,
+    fontWeight: '900',
+  },
   adButton: {
-    marginTop: 12,
+    marginTop: 10,
     alignSelf: 'flex-start',
     backgroundColor: COLORS.accent,
     borderRadius: 14,

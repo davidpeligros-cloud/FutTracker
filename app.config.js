@@ -3,23 +3,42 @@ const iosAdMobAppId = process.env.EXPO_PUBLIC_ADMOB_IOS_APP_ID || 'ca-app-pub-39
 
 export default {
   expo: {
-    name: 'FutbolLive',
+    name: 'FútbolLive',
     slug: 'futbol-live-app',
     owner: 'peligros_jrr',
+    scheme: 'futbollive',
     version: '1.0.0',
     orientation: 'portrait',
     platforms: ['ios', 'android'],
     sdkVersion: '54.0.0',
+    icon: './assets/icon.png',
+    userInterfaceStyle: 'dark',
     updates: {
       fallbackToCacheTimeout: 0,
     },
     assetBundlePatterns: ['**/*'],
+    splash: {
+      image: './assets/splash.png',
+      resizeMode: 'contain',
+      backgroundColor: '#05070c',
+    },
     ios: {
       supportsTablet: true,
       bundleIdentifier: 'com.futbollive.app',
+      buildNumber: '1',
+      infoPlist: {
+        ITSAppUsesNonExemptEncryption: false,
+      },
     },
     android: {
       package: 'com.futbollive.app',
+      versionCode: 1,
+      edgeToEdgeEnabled: true,
+      adaptiveIcon: {
+        foregroundImage: './assets/adaptive-icon.png',
+        backgroundColor: '#05070c',
+      },
+      permissions: ['INTERNET'],
     },
     extra: {
       eas: {

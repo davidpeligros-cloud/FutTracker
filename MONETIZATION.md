@@ -33,8 +33,10 @@ La app intenta comprar el paquete cuyo identificador contiene `monthly`, `annual
 La app usa:
 
 - Banners en zonas seguras como Home, Calendario y Equipos.
+- Banners repetidos en listas de partidos, equipos, jugadores, competiciones y Mi XI.
+- Interstitials al cambiar de seccion, abrir partidos o cambiar competiciones, con cooldown para no bloquear cada toque.
 - Rewarded ads para monedas y recursos.
-- Nada de interstitials durante partidos en directo.
+- Premium elimina todos los banners, interstitials y pausas patrocinadas.
 
 ## Probar en build nativa
 
