@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, Text, View } from 'react-native';
+import { NativeModules, Platform, Text, View } from 'react-native';
 
 const ENTITLEMENT_ID = process.env.EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID || 'premium';
 const IOS_REVENUECAT_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY || '';
@@ -25,6 +25,8 @@ const getPurchases = () => {
 
 const getAdsModule = () => {
   if (adsModule) return adsModule;
+  if (!NativeModules.RNGoogleMobileAdsModule) return null;
+
   try {
     adsModule = require('react-native-google-mobile-ads');
     return adsModule;
@@ -37,10 +39,11 @@ const getRevenueCatKey = () => (Platform.OS === 'ios' ? IOS_REVENUECAT_KEY : AND
 
 export const getMonetizationMode = () => {
   const hasRevenueCatKey = Boolean(getRevenueCatKey());
+  const hasNativeAdsModule = Boolean(NativeModules.RNGoogleMobileAdsModule);
   const hasAdMobIds = Boolean(Platform.OS === 'ios' ? IOS_BANNER_ID || IOS_REWARDED_ID : ANDROID_BANNER_ID || ANDROID_REWARDED_ID);
   return {
     revenueCat: hasRevenueCatKey ? 'live' : 'demo',
-    ads: hasAdMobIds ? 'live' : 'test',
+    ads: hasNativeAdsModule ? (hasAdMobIds ? 'live' : 'test') : 'expo-go',
   };
 };
 
