@@ -13,6 +13,7 @@ const ANDROID_REWARDED_ID = process.env.EXPO_PUBLIC_ADMOB_ANDROID_REWARDED_ID ||
 
 let purchasesInstance = null;
 let adsModule = null;
+const AD_LOAD_TIMEOUT_MS = 12000;
 
 const getPurchases = () => {
   if (purchasesInstance) return purchasesInstance;
@@ -113,7 +114,7 @@ export const purchasePremiumPlan = async (planId) => {
     const selectedPackage = packages.find((item) => {
       const identifier = `${item.identifier || ''} ${item.packageType || ''} ${item.product?.identifier || ''}`.toLowerCase();
       return identifier.includes(planId);
-    }) || packages[0];
+    }) || (planId === 'lifetime' ? packages.find((item) => `${item.packageType || ''}`.toLowerCase().includes('lifetime')) : null) || packages[0];
 
     if (!selectedPackage) return { success: true, demo: true, planId };
 
@@ -170,18 +171,37 @@ export const showInterstitialAd = () =>
     }
 
     const interstitial = ads.InterstitialAd.createForAdRequest(getInterstitialUnitId());
+    let settled = false;
+    const subscriptions = [];
+    const cleanup = () => subscriptions.forEach((unsubscribe) => unsubscribe?.());
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      cleanup();
+      resolve(result);
+    };
+    const timeoutId = setTimeout(() => finish({ shown: false, timeout: true }), AD_LOAD_TIMEOUT_MS);
 
-    const unsubscribeLoaded = interstitial.addAdEventListener(ads.AdEventType.LOADED, () => {
-      interstitial.show();
-    });
+    subscriptions.push(interstitial.addAdEventListener(ads.AdEventType.LOADED, () => {
+      try {
+        interstitial.show();
+      } catch (error) {
+        finish({ shown: false, error: true });
+      }
+    }));
 
-    const unsubscribeClosed = interstitial.addAdEventListener(ads.AdEventType.CLOSED, () => {
-      unsubscribeLoaded();
-      unsubscribeClosed();
-      resolve({ shown: true });
-    });
+    subscriptions.push(interstitial.addAdEventListener(ads.AdEventType.CLOSED, () => finish({ shown: true })));
 
-    interstitial.load();
+    if (ads.AdEventType.ERROR) {
+      subscriptions.push(interstitial.addAdEventListener(ads.AdEventType.ERROR, () => finish({ shown: false, error: true })));
+    }
+
+    try {
+      interstitial.load();
+    } catch (error) {
+      finish({ shown: false, error: true });
+    }
   });
 
 export const showRewardedAd = () =>
@@ -194,23 +214,41 @@ export const showRewardedAd = () =>
 
     const rewarded = ads.RewardedAd.createForAdRequest(getRewardedUnitId());
     let earnedReward = false;
+    let settled = false;
+    const subscriptions = [];
+    const cleanup = () => subscriptions.forEach((unsubscribe) => unsubscribe?.());
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      cleanup();
+      resolve(result);
+    };
+    const timeoutId = setTimeout(() => finish({ rewarded: false, timeout: true }), AD_LOAD_TIMEOUT_MS);
 
-    const unsubscribeEarned = rewarded.addAdEventListener(ads.RewardedAdEventType.EARNED_REWARD, () => {
+    subscriptions.push(rewarded.addAdEventListener(ads.RewardedAdEventType.EARNED_REWARD, () => {
       earnedReward = true;
-    });
+    }));
 
-    const unsubscribeLoaded = rewarded.addAdEventListener(ads.RewardedAdEventType.LOADED, () => {
-      rewarded.show();
-    });
+    subscriptions.push(rewarded.addAdEventListener(ads.RewardedAdEventType.LOADED, () => {
+      try {
+        rewarded.show();
+      } catch (error) {
+        finish({ rewarded: false, error: true });
+      }
+    }));
 
-    const unsubscribeClosed = rewarded.addAdEventListener(ads.AdEventType.CLOSED, () => {
-      unsubscribeEarned();
-      unsubscribeLoaded();
-      unsubscribeClosed();
-      resolve({ rewarded: earnedReward });
-    });
+    subscriptions.push(rewarded.addAdEventListener(ads.AdEventType.CLOSED, () => finish({ rewarded: earnedReward })));
 
-    rewarded.load();
+    if (ads.AdEventType.ERROR) {
+      subscriptions.push(rewarded.addAdEventListener(ads.AdEventType.ERROR, () => finish({ rewarded: false, error: true })));
+    }
+
+    try {
+      rewarded.load();
+    } catch (error) {
+      finish({ rewarded: false, error: true });
+    }
   });
 
 const getBannerUnitId = () => {

@@ -3,15 +3,16 @@ const iosAdMobAppId = process.env.EXPO_PUBLIC_ADMOB_IOS_APP_ID || 'ca-app-pub-39
 
 export default {
   expo: {
-    name: 'FútbolLive',
+    name: 'FutTracker',
     slug: 'futbol-live-app',
     owner: 'peligros_jrr',
-    scheme: 'futbollive',
+    scheme: 'futtracker',
     version: '1.0.0',
     orientation: 'portrait',
     platforms: ['ios', 'android'],
     sdkVersion: '54.0.0',
     icon: './assets/icon.png',
+    description: 'Resultados, directos, alertas y seguimiento moderno de fútbol.',
     userInterfaceStyle: 'dark',
     updates: {
       fallbackToCacheTimeout: 0,
@@ -24,14 +25,14 @@ export default {
     },
     ios: {
       supportsTablet: true,
-      bundleIdentifier: 'com.futbollive.app',
+      bundleIdentifier: 'com.futtracker.app',
       buildNumber: '1',
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
       },
     },
     android: {
-      package: 'com.futbollive.app',
+      package: 'com.futtracker.app',
       versionCode: 1,
       edgeToEdgeEnabled: true,
       adaptiveIcon: {
@@ -39,6 +40,14 @@ export default {
         backgroundColor: '#05070c',
       },
       permissions: ['INTERNET'],
+    },
+    web: {
+      name: 'FutTracker',
+      shortName: 'FutTracker',
+      favicon: './assets/icon.png',
+      bundler: 'metro',
+      backgroundColor: '#05070c',
+      themeColor: '#34d399',
     },
     extra: {
       eas: {

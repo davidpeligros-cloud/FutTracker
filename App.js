@@ -1,5 +1,7 @@
 ﻿import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
+import Constants from 'expo-constants';
+import * as Notifications from 'expo-notifications';
 import {
   ScrollView,
   View,
@@ -13,6 +15,8 @@ import {
   Animated,
   Easing,
   Alert,
+  Platform,
+  useWindowDimensions,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -25,6 +29,16 @@ import {
   showInterstitialAd,
   showRewardedAd,
 } from './services/monetization';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 const COLORS = {
   bg: '#05070c',
@@ -58,15 +72,15 @@ const LEAGUES = [
 const API_BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
 const STORAGE_KEY = 'futbol_live_state_v3';
 const DEFAULT_FREE_LIMITS = {
-  aiDaily: 3,
   notifications: 3,
 };
 const INTERSTITIAL_COOLDOWN_MS = 45000;
 const AD_BREAK_INTERVAL = 3;
+const LIVE_REFRESH_MS = 60000;
+const PUSH_BACKEND_URL = process.env.EXPO_PUBLIC_PUSH_BACKEND_URL || '';
+const EAS_PROJECT_ID = Constants.expoConfig?.extra?.eas?.projectId || Constants.easConfig?.projectId;
 const PREMIUM_PLANS = [
-  { id: 'monthly', label: 'Mensual', price: '6,99', accent: 'Popular', description: 'Ideal para probar el valor premium durante una temporada.' },
-  { id: 'annual', label: 'Anual', price: '44,99', accent: 'Mejor valor', description: 'La opción inteligente para usuarios fieles durante todo el año.' },
-  { id: 'lifetime', label: 'De por vida', price: '119,99', accent: 'Lanzamiento', description: 'Oferta limitada para los primeros usuarios.' },
+  { id: 'lifetime', label: 'Pago único', price: '5,99', accent: 'Sin suscripción', description: 'Desbloquea Premium para siempre con un único pago.' },
 ];
 const ALERT_TYPES = [
   { id: 'goal', label: 'Gol', priority: 'high' },
@@ -96,7 +110,6 @@ const DEFAULT_ENTITLEMENTS = {
   premiumPlan: null,
   coins: 120,
   xp: 240,
-  aiUsesToday: 0,
   adRewardsClaimed: 0,
   hasSeenPaywall: false,
   notificationsEnabled: true,
@@ -273,11 +286,82 @@ function useEntranceAnimation(trigger) {
   };
 }
 
-function StatTile({ label, value, tone = 'neutral' }) {
+function useLoopPulse(duration = 2800) {
+  const pulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0,
+          duration,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    animation.start();
+    return () => animation.stop();
+  }, [duration, pulse]);
+
+  return pulse;
+}
+
+function AmbientBackground() {
+  const pulse = useLoopPulse(4200);
+  const translateY = pulse.interpolate({ inputRange: [0, 1], outputRange: [0, 18] });
+  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] });
+  const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.38, 0.62] });
+
   return (
-    <View style={[styles.statTile, tone === 'accent' && styles.statTileAccent, tone === 'gold' && styles.statTileGold]}>
+    <View pointerEvents="none" style={styles.ambientLayer}>
+      <Animated.View style={[styles.ambientGlowTop, { opacity, transform: [{ translateY }, { scale }] }]} />
+      <Animated.View style={[styles.ambientGlowBottom, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.22, 0.4] }) }]} />
+      <View style={styles.pitchLine} />
+    </View>
+  );
+}
+
+function StatTile({ label, value, tone = 'neutral' }) {
+  const entranceStyle = useEntranceAnimation(`${label}-${value}`);
+
+  return (
+    <Animated.View style={[styles.statTile, tone === 'accent' && styles.statTileAccent, tone === 'gold' && styles.statTileGold, entranceStyle]}>
       <Text style={styles.statTileLabel}>{label}</Text>
       <Text style={styles.statTileValue}>{value}</Text>
+    </Animated.View>
+  );
+}
+
+function HomeHeroMatch({ match }) {
+  if (!match) return null;
+
+  return (
+    <View style={styles.homeHeroMatchStrip}>
+      <View style={styles.homeHeroTeams}>
+        <TeamCrest uri={match.homeCrest} fallback={match.homeBadge} color={match.homeColor} size={30} />
+        <View style={styles.homeHeroVs}>
+          <Text style={styles.homeHeroVsText}>{match.live ? `${match.homeScore} - ${match.awayScore}` : match.time}</Text>
+          <Text style={styles.homeHeroVsMeta}>{match.live ? 'EN DIRECTO' : 'PRÓXIMO'}</Text>
+        </View>
+        <TeamCrest uri={match.awayCrest} fallback={match.awayBadge} color={match.awayColor} size={30} />
+      </View>
+    </View>
+  );
+}
+
+function InsightPill({ label, value, tone = 'neutral' }) {
+  return (
+    <View style={[styles.insightPill, tone === 'accent' && styles.insightPillAccent, tone === 'gold' && styles.insightPillGold]}>
+      <Text style={styles.insightPillLabel}>{label}</Text>
+      <Text style={styles.insightPillValue}>{value}</Text>
     </View>
   );
 }
@@ -333,20 +417,24 @@ function AdBreak({ placement, onPress }) {
 }
 
 function PlanCard({ plan, onPress, highlight, disabled }) {
+  const entranceStyle = useEntranceAnimation(plan.id);
+
   return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.85}
-      disabled={disabled}
-      style={[styles.planCard, highlight && styles.planCardHighlight, disabled && styles.planCardDisabled]}
-    >
-      <View style={styles.planHeaderRow}>
-        <Text style={styles.planLabel}>{plan.label}</Text>
-        <Text style={styles.planAccent}>{plan.accent}</Text>
-      </View>
-      <Text style={styles.planPrice}>EUR {plan.price}</Text>
-      <Text style={styles.planDescription}>{plan.description}</Text>
-    </TouchableOpacity>
+    <Animated.View style={entranceStyle}>
+      <TouchableOpacity
+        onPress={onPress}
+        activeOpacity={0.85}
+        disabled={disabled}
+        style={[styles.planCard, highlight && styles.planCardHighlight, disabled && styles.planCardDisabled]}
+      >
+        <View style={styles.planHeaderRow}>
+          <Text style={styles.planLabel}>{plan.label}</Text>
+          <Text style={styles.planAccent}>{plan.accent}</Text>
+        </View>
+        <Text style={styles.planPrice}>EUR {plan.price}</Text>
+        <Text style={styles.planDescription}>{plan.description}</Text>
+      </TouchableOpacity>
+    </Animated.View>
   );
 }
 
@@ -403,11 +491,22 @@ function LiveDot() {
 
 function MatchCard({ match, onPress }) {
   const entranceStyle = useEntranceAnimation(match.id);
+  const pressScale = useRef(new Animated.Value(1)).current;
+  const animatePress = (toValue) => {
+    Animated.spring(pressScale, {
+      toValue,
+      useNativeDriver: true,
+      speed: 18,
+      bounciness: 6,
+    }).start();
+  };
 
   return (
-    <Animated.View style={entranceStyle}>
+    <Animated.View style={[entranceStyle, { transform: [...entranceStyle.transform, { scale: pressScale }] }]}>
       <TouchableOpacity
         onPress={onPress}
+        onPressIn={() => animatePress(0.985)}
+        onPressOut={() => animatePress(1)}
         activeOpacity={0.78}
         style={[styles.card, { borderLeftColor: match.homeColor, borderLeftWidth: 4 }, match.live && styles.cardLive]}
       >
@@ -446,7 +545,7 @@ function MatchCard({ match, onPress }) {
   );
 }
 
-function TeamRow({ team, onPress, selected }) {
+function TeamRow({ team, onPress, selected, compact = false }) {
   const entranceStyle = useEntranceAnimation(team.id);
 
   return (
@@ -454,19 +553,19 @@ function TeamRow({ team, onPress, selected }) {
       <TouchableOpacity
         onPress={onPress}
         activeOpacity={0.78}
-        style={[styles.teamRow, { borderLeftColor: team.primaryColor, borderLeftWidth: 4 }, selected && styles.teamRowSelected]}
+        style={[styles.teamRow, compact && styles.teamRowCompact, { borderLeftColor: team.primaryColor, borderLeftWidth: 4 }, selected && styles.teamRowSelected]}
       >
-      <Text style={styles.teamPos}>{team.pos}</Text>
+      <Text style={[styles.teamPos, compact && styles.teamPosCompact]}>{team.pos}</Text>
       <View style={styles.teamIdentity}>
-        <TeamCrest uri={team.crest} fallback={team.flag} color={team.primaryColor} size={30} />
-        <Text style={styles.teamName} numberOfLines={1}>{team.name}</Text>
+        <TeamCrest uri={team.crest} fallback={team.flag} color={team.primaryColor} size={compact ? 26 : 30} />
+        <Text style={styles.teamName} numberOfLines={compact ? 2 : 1}>{team.name}</Text>
       </View>
       <Text style={styles.teamCell}>{team.pj}</Text>
       <Text style={[styles.teamCell, styles.teamPoints]}>{team.pts}</Text>
-      <Text style={styles.teamCell}>{team.pg}</Text>
-      <Text style={styles.teamCell}>{team.pe}</Text>
-      <Text style={[styles.teamCell, styles.teamLose]}>{team.pp}</Text>
-      <View style={styles.teamFormaRow}>
+      {!compact && <Text style={styles.teamCell}>{team.pg}</Text>}
+      {!compact && <Text style={styles.teamCell}>{team.pe}</Text>}
+      {!compact && <Text style={[styles.teamCell, styles.teamLose]}>{team.pp}</Text>}
+      <View style={[styles.teamFormaRow, compact && styles.teamFormaRowCompact]}>
         {team.forma.map((f, i) => (
           <View key={i} style={[styles.formaBullet, { backgroundColor: formaColor(f) }]} />
         ))}
@@ -512,7 +611,7 @@ function TeamDetail({ team }) {
   );
 }
 
-function PlayerCard({ player, selected, onPress, inSquad, onToggleSquad, squadDisabled }) {
+function PlayerCard({ player, selected, onPress }) {
   const entranceStyle = useEntranceAnimation(player.id);
 
   return (
@@ -542,22 +641,6 @@ function PlayerCard({ player, selected, onPress, inSquad, onToggleSquad, squadDi
           ))}
         </View>
       )}
-      {onToggleSquad && (
-        <TouchableOpacity
-          onPress={() => onToggleSquad(player)}
-          disabled={squadDisabled && !inSquad}
-          activeOpacity={0.8}
-          style={[
-            styles.squadToggleButton,
-            inSquad && styles.squadToggleButtonActive,
-            squadDisabled && !inSquad && styles.squadToggleButtonDisabled,
-          ]}
-        >
-          <Text style={[styles.squadToggleText, inSquad && styles.squadToggleTextActive]}>
-            {inSquad ? 'Quitar de Mi XI' : `Añadir · ${getPlayerCost(player)}M`}
-          </Text>
-        </TouchableOpacity>
-      )}
       </TouchableOpacity>
     </Animated.View>
   );
@@ -581,7 +664,6 @@ const MAIN_NAV = [
   { id: 'home', label: 'Inicio', icon: '⌂' },
   { id: 'live', label: 'En directo', icon: '●' },
   { id: 'explore', label: 'Explorar', icon: '⌕' },
-  { id: 'squad', label: 'Mi XI', icon: '★' },
   { id: 'profile', label: 'Perfil', icon: '◌' },
 ];
 
@@ -729,21 +811,8 @@ function buildTeamsFromMatches(matches, leagueLabel) {
   return Object.values(teamMap).sort((a, b) => a.name.localeCompare(b.name, 'es'));
 }
 
-const SQUAD_BUDGET = 100;
-const SQUAD_LIMIT = 11;
-
-function getPlayerCost(player) {
-  const rating = parseFloat(player.rating) || 7;
-  return Math.max(5, Math.round(rating * 1.7 + player.goals * 0.08 + player.assists * 0.06));
-}
-
-function getPlayerProjection(player, captainId) {
-  const rating = parseFloat(player.rating) || 7;
-  const base = Math.round(rating * 5 + player.goals * 4 + player.assists * 3 - player.yellow - player.red * 3);
-  return player.id === captainId ? base * 2 : base;
-}
-
 export default function App() {
+  const { width: windowWidth } = useWindowDimensions();
   const [activeNav, setActiveNav] = useState('home');
   const [exploreTab, setExploreTab] = useState('schedule');
   const [selectedLeague, setSelectedLeague] = useState('fifa.world');
@@ -759,8 +828,6 @@ export default function App() {
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [matchDetail, setMatchDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [squadIds, setSquadIds] = useState([]);
-  const [captainId, setCaptainId] = useState(null);
   const [profile, setProfile] = useState(DEFAULT_PROFILE);
   const [entitlements, setEntitlements] = useState(DEFAULT_ENTITLEMENTS);
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -771,8 +838,22 @@ export default function App() {
   const [monetizationMode, setMonetizationMode] = useState({ revenueCat: 'demo', ads: 'test' });
   const [purchaseLoading, setPurchaseLoading] = useState(false);
   const [adLoading, setAdLoading] = useState(false);
+  const [pushToken, setPushToken] = useState(null);
   const contentAnim = useRef(new Animated.Value(1)).current;
   const lastInterstitialAt = useRef(0);
+  const previousScoreRef = useRef({});
+  const hasScoreBaselineRef = useRef(false);
+  const notificationsReadyRef = useRef(false);
+  const isCompact = windowWidth < 380;
+  const isWide = windowWidth >= 720;
+  const maxContentWidth = 720;
+  const contentFrameStyle = isWide ? styles.contentFrame : null;
+  const bottomNavWideStyle = isWide
+    ? {
+        left: Math.max(20, (windowWidth - maxContentWidth) / 2 + 16),
+        right: Math.max(20, (windowWidth - maxContentWidth) / 2 + 16),
+      }
+    : null;
 
   useEffect(() => {
     const hydrate = async () => {
@@ -782,9 +863,7 @@ export default function App() {
           const parsed = JSON.parse(stored);
           if (parsed.profile) setProfile(normalizeSavedProfile(parsed.profile));
           if (parsed.entitlements) setEntitlements(normalizeSavedEntitlements(parsed.entitlements));
-          if (Array.isArray(parsed.squadIds)) setSquadIds(parsed.squadIds);
-          if (parsed.captainId) setCaptainId(parsed.captainId);
-          if (parsed.activeNav) setActiveNav(parsed.activeNav);
+          if (MAIN_NAV.some((item) => item.id === parsed.activeNav)) setActiveNav(parsed.activeNav);
           if (parsed.exploreTab) setExploreTab(parsed.exploreTab);
           if (parsed.selectedLeague) setSelectedLeague(parsed.selectedLeague);
         }
@@ -809,7 +888,6 @@ export default function App() {
           ...current,
           premiumPlan: subscription.planId || current.premiumPlan || 'premium',
           purchaseSource: subscription.source,
-          aiUsesToday: 0,
           notificationsEnabled: true,
         }));
       }
@@ -819,12 +897,42 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const prepareNotifications = async () => {
+      if (Platform.OS === 'web') return;
+
+      try {
+        if (Platform.OS === 'android') {
+          await Notifications.setNotificationChannelAsync('goals', {
+            name: 'Goles y directos',
+            importance: Notifications.AndroidImportance.HIGH,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: COLORS.accent,
+          });
+        }
+
+        const currentPermissions = await Notifications.getPermissionsAsync();
+        const finalPermissions = currentPermissions.granted
+          ? currentPermissions
+          : await Notifications.requestPermissionsAsync();
+
+        notificationsReadyRef.current = Boolean(finalPermissions.granted);
+        if (finalPermissions.granted && EAS_PROJECT_ID) {
+          const tokenResponse = await Notifications.getExpoPushTokenAsync({ projectId: EAS_PROJECT_ID });
+          setPushToken(tokenResponse.data);
+        }
+      } catch (error) {
+        notificationsReadyRef.current = false;
+      }
+    };
+
+    prepareNotifications();
+  }, []);
+
+  useEffect(() => {
     if (!hydrated) return;
     const payload = {
       profile,
       entitlements,
-      squadIds,
-      captainId,
       activeNav,
       exploreTab,
       selectedLeague,
@@ -832,7 +940,31 @@ export default function App() {
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload)).catch((e) =>
       console.warn('Error saving state:', e)
     );
-  }, [hydrated, profile, entitlements, squadIds, captainId, activeNav, exploreTab, selectedLeague]);
+  }, [hydrated, profile, entitlements, activeNav, exploreTab, selectedLeague]);
+
+  useEffect(() => {
+    if (!hydrated || !pushToken || !PUSH_BACKEND_URL) return;
+
+    const registerPushSubscription = async () => {
+      try {
+        await fetch(`${PUSH_BACKEND_URL.replace(/\/$/, '')}/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token: pushToken,
+            favoriteTeam: profile.favoriteTeam,
+            favoriteLeague: profile.favoriteLeague,
+            selectedLeague,
+            alertTypes: profile.alertTypes,
+          }),
+        });
+      } catch (error) {
+        console.warn('Error registering push token:', error);
+      }
+    };
+
+    registerPushSubscription();
+  }, [hydrated, pushToken, profile.favoriteTeam, profile.favoriteLeague, profile.alertTypes, selectedLeague]);
 
   useEffect(() => {
     if (hydrated && !profile.onboardingDone) {
@@ -866,36 +998,9 @@ export default function App() {
   };
 
   const availablePlayers = players.length > 0 ? players : FALLBACK_PLAYERS;
-  const squadPlayers = squadIds
-    .map((id) => availablePlayers.find((player) => player.id === id))
-    .filter(Boolean);
-  const squadCost = squadPlayers.reduce((total, player) => total + getPlayerCost(player), 0);
-  const squadPoints = squadPlayers.reduce((total, player) => total + getPlayerProjection(player, captainId), 0);
-  const budgetLeft = SQUAD_BUDGET - squadCost;
   const isPremium = Boolean(entitlements.premiumPlan);
-  const aiUsesLeft = isPremium ? Infinity : Math.max(0, DEFAULT_FREE_LIMITS.aiDaily - entitlements.aiUsesToday);
   const notificationQuotaLeft = isPremium ? Infinity : Math.max(0, DEFAULT_FREE_LIMITS.notifications - entitlements.adRewardsClaimed);
-
-  const toggleSquadPlayer = (player) => {
-    const cost = getPlayerCost(player);
-    const isPicked = squadIds.includes(player.id);
-
-    if (isPicked) {
-      const nextIds = squadIds.filter((id) => id !== player.id);
-      setSquadIds(nextIds);
-      if (captainId === player.id) {
-        setCaptainId(nextIds[0] || null);
-      }
-      return;
-    }
-
-    if (squadIds.length >= SQUAD_LIMIT || squadCost + cost > SQUAD_BUDGET) return;
-
-    setSquadIds([...squadIds, player.id]);
-    if (!captainId) {
-      setCaptainId(player.id);
-    }
-  };
+  const isWeb = Platform.OS === 'web';
 
   const openPaywall = (reason = 'premium') => {
     setPaywallReason(reason);
@@ -922,8 +1027,7 @@ export default function App() {
       ...current,
       premiumPlan: result.planId || planId,
       purchaseSource: result.demo ? 'demo' : result.source || 'revenuecat',
-      coins: current.coins + (planId === 'lifetime' ? 500 : 200),
-      aiUsesToday: 0,
+      coins: current.coins + 200,
       notificationsEnabled: true,
     }));
     setShowPaywall(false);
@@ -935,7 +1039,7 @@ export default function App() {
     setPurchaseLoading(false);
 
     if (!result.success) {
-      Alert.alert('Sin compras activas', 'No he encontrado una suscripción Premium activa para restaurar.');
+      Alert.alert('Sin compras activas', 'No he encontrado una compra Premium activa para restaurar.');
       return;
     }
 
@@ -943,7 +1047,6 @@ export default function App() {
       ...current,
       premiumPlan: result.planId || 'premium',
       purchaseSource: result.source || 'revenuecat',
-      aiUsesToday: 0,
       notificationsEnabled: true,
     }));
     setShowPaywall(false);
@@ -962,7 +1065,6 @@ export default function App() {
     setEntitlements((current) => ({
       ...current,
       coins: current.coins + 25,
-      aiUsesToday: Math.max(0, current.aiUsesToday - 1),
       adRewardsClaimed: current.adRewardsClaimed + 1,
     }));
   };
@@ -1013,14 +1115,59 @@ export default function App() {
     }
   };
 
+  const notifyGoal = async (match, teamName, newScore, oldScore) => {
+    if (!notificationsReadyRef.current || !entitlements.notificationsEnabled || !profile.alertTypes.includes('goal')) return;
+
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: `Gol de ${teamName}`,
+        body: `${match.home} ${match.homeScore} - ${match.awayScore} ${match.away}`,
+        data: {
+          matchId: match.id,
+          oldScore,
+          newScore,
+        },
+        sound: true,
+      },
+      trigger: null,
+    });
+  };
+
+  const detectScoreChanges = (nextMatches) => {
+    const nextScores = {};
+
+    nextMatches.forEach((match) => {
+      nextScores[match.id] = {
+        homeScore: match.homeScore,
+        awayScore: match.awayScore,
+      };
+
+      const previous = previousScoreRef.current[match.id];
+      if (!hasScoreBaselineRef.current || !previous || !match.live) return;
+
+      if (match.homeScore > previous.homeScore) {
+        notifyGoal(match, match.home, match.homeScore, previous.homeScore);
+      }
+
+      if (match.awayScore > previous.awayScore) {
+        notifyGoal(match, match.away, match.awayScore, previous.awayScore);
+      }
+    });
+
+    previousScoreRef.current = nextScores;
+    hasScoreBaselineRef.current = true;
+  };
+
   useEffect(() => {
+    hasScoreBaselineRef.current = false;
+    previousScoreRef.current = {};
     loadLeagueData(selectedLeague);
-    const interval = setInterval(() => loadLeagueData(selectedLeague), 60000);
+    const interval = setInterval(() => loadLeagueData(selectedLeague, { silent: true }), LIVE_REFRESH_MS);
     return () => clearInterval(interval);
   }, [selectedLeague]);
 
-  const loadLeagueData = async (leagueId) => {
-    setLoading(true);
+  const loadLeagueData = async (leagueId, options = {}) => {
+    if (!options.silent) setLoading(true);
     setError(null);
 
     try {
@@ -1031,6 +1178,7 @@ export default function App() {
       const events = scoreboardData.events || [];
 
       const parsedMatches = events.map((event) => parseMatch(event, leagueInfo.label));
+      detectScoreChanges(parsedMatches);
       setMatches(parsedMatches);
 
       try {
@@ -1120,7 +1268,7 @@ export default function App() {
       setTeams([]);
       setPlayers(FALLBACK_PLAYERS);
     } finally {
-      setLoading(false);
+      if (!options.silent) setLoading(false);
     }
   };
 
@@ -1145,21 +1293,22 @@ export default function App() {
   const featuredHomeMatch = favoriteMatches[0] || liveMatches[0] || scheduledMatches[0] || null;
   const homeCommunityStory = liveMatches[0]
     ? `${liveMatches[0].home} presiona con intensidad frente a ${liveMatches[0].away}.`
-    : `Tu XI está listo para la jornada y la comunidad ya está comentando ${profile.favoriteTeam}.`;
+    : `La jornada está lista y ya puedes seguir todo lo importante de ${profile.favoriteTeam}.`;
 
   return (
     <SafeAreaProvider>
     <SafeAreaView style={styles.safe}>
       <StatusBar style="light" />
+      <AmbientBackground />
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.brand}>⚽ <Text style={styles.brandAccent}>Fútbol</Text>Live</Text>
-            <Text style={styles.headerSubtitle}>
+        <View style={[styles.header, contentFrameStyle, isCompact && styles.headerCompact]}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[styles.brand, isCompact && styles.brandCompact]} numberOfLines={1}>Fut<Text style={styles.brandAccent}>Tracker</Text></Text>
+            <Text style={styles.headerSubtitle} numberOfLines={1}>
               {liveMatches.length} partidos en directo{lastUpdated ? ` · Act. ${lastUpdated}` : ''}
             </Text>
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <View style={[styles.headerActions, isCompact && styles.headerActionsCompact]}>
             <TouchableOpacity 
               onPress={() => loadLeagueData(selectedLeague)} 
               style={styles.refreshButton}
@@ -1175,7 +1324,7 @@ export default function App() {
         </View>
 
         {activeNav === 'explore' && (
-          <View style={styles.tabBar}>
+          <View style={[styles.tabBar, contentFrameStyle, isCompact && styles.tabBarCompact]}>
             {EXPLORE_TABS.map((item) => (
               <TouchableOpacity
                 key={item.id}
@@ -1186,7 +1335,12 @@ export default function App() {
                 style={[styles.tabButton, exploreTab === item.id && styles.tabButtonActive]}
               >
                 <Text style={styles.tabIcon}>{item.icon}</Text>
-                <Text style={[styles.tabLabel, exploreTab === item.id && styles.tabLabelActive]}>{item.label}</Text>
+                <Text
+                  style={[styles.tabLabel, isCompact && styles.tabLabelCompact, exploreTab === item.id && styles.tabLabelActive]}
+                  numberOfLines={1}
+                >
+                  {item.label}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -1195,7 +1349,7 @@ export default function App() {
         <ScrollView 
           horizontal 
           showsHorizontalScrollIndicator={false} 
-          style={styles.leagueBar} 
+          style={[styles.leagueBar, contentFrameStyle]} 
           contentContainerStyle={styles.leagueBarContent}
         >
           {LEAGUES.map((league) => (
@@ -1205,8 +1359,6 @@ export default function App() {
                 setSelectedLeague(league.id);
                 setSelectedTeam(null);
                 setSelectedPlayer(null);
-                setSquadIds([]);
-                setCaptainId(null);
               }}
               style={[styles.leagueButton, selectedLeague === league.id && styles.leagueButtonActive]}
             >
@@ -1233,14 +1385,15 @@ export default function App() {
         )}
 
         {!loading && !error && (
-          <Animated.View style={[styles.body, contentAnimatedStyle]}>
+          <Animated.View style={[styles.body, contentFrameStyle, isCompact && styles.bodyCompact, contentAnimatedStyle]}>
             {activeNav === 'home' && (
               <View style={styles.homeShell}>
                 <View style={styles.homeHero}>
-                  <View>
-                    <Text style={styles.homeEyebrow}>Tu futbol, a tu ritmo</Text>
-                    <Text style={styles.homeTitle}>{profile.favoriteTeam}</Text>
+                  <View style={styles.homeHeroCopy}>
+                    <Text style={styles.homeEyebrow}>Tu fútbol, a tu ritmo</Text>
+                    <Text style={[styles.homeTitle, isCompact && styles.homeTitleCompact]} numberOfLines={1}>{profile.favoriteTeam}</Text>
                     <Text style={styles.homeSubtitle}>{favoriteLeague.label} · {profile.favoritePlayer}</Text>
+                    <HomeHeroMatch match={featuredHomeMatch} />
                   </View>
                   <View style={styles.homeHeroBadge}>
                     <Text style={styles.homeHeroBadgeValue}>{entitlements.coins}</Text>
@@ -1248,9 +1401,9 @@ export default function App() {
                   </View>
                 </View>
                 <View style={styles.homeGrid}>
-                  <StatTile label="Mi XI" value={`${squadPlayers.length}/${SQUAD_LIMIT}`} tone="accent" />
-                  <StatTile label="Puntos" value={`${squadPoints}`} tone="gold" />
-                  <StatTile label="IA" value={isPremium ? 'Ilimitada' : `${aiUsesLeft} usos`} />
+                  <StatTile label="Directos" value={`${liveMatches.length}`} tone="accent" />
+                  <StatTile label="Favorito" value={profile.favoriteTeam.split(' ')[0]} tone="gold" />
+                  <StatTile label="Liga" value={favoriteLeague.label.replace(' League', '')} />
                   <StatTile label="Alertas" value={`${profile.alertTypes.length}`} />
                 </View>
                 {featuredHomeMatch ? (
@@ -1261,16 +1414,45 @@ export default function App() {
                       <View style={styles.featureMatchCenter}>
                         <Text style={styles.featureMatchLeague}>{featuredHomeMatch.league}</Text>
                         <Text style={styles.featureMatchScore}>{featuredHomeMatch.live ? `${featuredHomeMatch.homeScore} - ${featuredHomeMatch.awayScore}` : featuredHomeMatch.time}</Text>
-                        <Text style={styles.featureMatchTeams}>{featuredHomeMatch.home} vs {featuredHomeMatch.away}</Text>
+                        <Text style={styles.featureMatchTeams} numberOfLines={2}>{featuredHomeMatch.home} vs {featuredHomeMatch.away}</Text>
                       </View>
                       <TeamCrest uri={featuredHomeMatch.awayCrest} fallback={featuredHomeMatch.awayBadge} color={featuredHomeMatch.awayColor} />
                     </View>
                   </TouchableOpacity>
                 ) : null}
+                <View style={styles.homeModuleRow}>
+                  <View style={styles.homeModuleCard}>
+                    <Text style={styles.homeModuleTitle}>Pulso de jornada</Text>
+                    <Text style={styles.homeModuleValue}>{liveMatches.length || matches.length}</Text>
+                    <Text style={styles.homeModuleMeta}>{liveMatches.length ? 'directos activos ahora' : 'partidos listos para revisar'}</Text>
+                  </View>
+                  <View style={styles.homeModuleCard}>
+                    <Text style={styles.homeModuleTitle}>Predicción</Text>
+                    <Text style={styles.homeModuleValue}>{featuredHomeMatch ? '1X' : 'Listo'}</Text>
+                    <Text style={styles.homeModuleMeta}>{featuredHomeMatch ? `${featuredHomeMatch.home} no pierde según tendencia` : 'elige favoritos para afinar la home'}</Text>
+                  </View>
+                </View>
+                <View style={styles.homeSectionStack}>
+                  <View style={styles.homeSectionCard}>
+                    <Text style={styles.sectionTitle}>RADAR FUTTRACKER</Text>
+                    <Text style={styles.homeSectionLead}>{homeCommunityStory}</Text>
+                    <View style={styles.insightRow}>
+                      <InsightPill label="Racha" value={`${entitlements.xp} XP`} tone="gold" />
+                      <InsightPill label="Alertas" value={isPremium ? 'Pro' : `${notificationQuotaLeft} libres`} tone="accent" />
+                      <InsightPill label="Modo" value={isWeb ? 'Web' : 'App'} />
+                    </View>
+                  </View>
+                  {isWeb && (
+                    <View style={styles.webInstallCard}>
+                      <Text style={styles.webInstallTitle}>FutTracker siempre a mano</Text>
+                      <Text style={styles.webInstallText}>Abre esta web en el móvil y usa "Añadir a pantalla de inicio" para tenerla como app sin Play Store.</Text>
+                    </View>
+                  )}
+                </View>
                 {!isPremium && (
                   <AdBanner
                     title="Sin anuncios durante los directos"
-                    subtitle="Los banners viven en explorar y resultados. Premium los elimina y desbloquea xG y heatmaps."
+                    subtitle="Premium elimina publicidad y desbloquea estadísticas avanzadas, mapas de calor y alertas rápidas."
                     cta="Ver premium"
                     onPress={() => openPaywall('home')}
                   />
@@ -1282,11 +1464,11 @@ export default function App() {
                   </TouchableOpacity>
                 )}
                 <View style={styles.homeActionRow}>
-                  <TouchableOpacity activeOpacity={0.8} onPress={() => switchNav('squad')} style={styles.homeAction}>
-                    <Text style={styles.homeActionText}>Abrir Mi XI</Text>
+                  <TouchableOpacity activeOpacity={0.8} onPress={() => switchNav('live')} style={styles.homeAction}>
+                    <Text style={styles.homeActionText}>Ver directos</Text>
                   </TouchableOpacity>
                   <TouchableOpacity activeOpacity={0.8} onPress={() => switchNav('explore')} style={styles.homeActionSecondary}>
-                    <Text style={styles.homeActionText}>Explorar</Text>
+                    <Text style={styles.homeActionSecondaryText}>Explorar</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1343,8 +1525,17 @@ export default function App() {
                   />
                 )}
                 <View style={styles.tableHeader}>
-                  {['#', 'Equipo', 'PJ', 'Pts', 'G', 'E', 'P', 'Forma'].map((title) => (
-                    <Text key={title} style={[styles.tableHeaderText, title === 'Equipo' ? styles.tableHeaderName : styles.tableHeaderCenter]}>{title}</Text>
+                  {(isCompact ? ['#', 'Equipo', 'PJ', 'Pts', 'Forma'] : ['#', 'Equipo', 'PJ', 'Pts', 'G', 'E', 'P', 'Forma']).map((title) => (
+                    <Text
+                      key={title}
+                      style={[
+                        styles.tableHeaderText,
+                        title === 'Equipo' ? styles.tableHeaderName : title === 'Forma' ? styles.tableHeaderForma : styles.tableHeaderCenter,
+                        isCompact && title !== 'Equipo' && styles.tableHeaderCenterCompact,
+                      ]}
+                    >
+                      {title}
+                    </Text>
                   ))}
                 </View>
                 <View style={styles.cardStack}>
@@ -1354,6 +1545,7 @@ export default function App() {
                         team={team}
                         selected={selectedTeam?.id === team.id}
                         onPress={() => setSelectedTeam(selectedTeam?.id === team.id ? null : team)}
+                        compact={isCompact}
                       />
                       {!isPremium && (index + 1) % AD_BREAK_INTERVAL === 0 && <AdBreak placement="feed" onPress={() => openPaywall('teams-list')} />}
                     </View>
@@ -1381,9 +1573,6 @@ export default function App() {
                         player={player}
                         selected={selectedPlayer?.id === player.id}
                         onPress={() => setSelectedPlayer(selectedPlayer?.id === player.id ? null : player)}
-                        inSquad={squadIds.includes(player.id)}
-                        onToggleSquad={toggleSquadPlayer}
-                        squadDisabled={squadIds.length >= SQUAD_LIMIT || budgetLeft < getPlayerCost(player)}
                       />
                       {!isPremium && (index + 1) % AD_BREAK_INTERVAL === 0 && <AdBreak placement="feed" onPress={() => openPaywall('players-list')} />}
                     </View>
@@ -1412,83 +1601,18 @@ export default function App() {
               </View>
             )}
 
-            {activeNav === 'squad' && (
-              <View>
-                <Text style={styles.sectionTitle}>MI XI · {leagueTitle}</Text>
-                <View style={styles.squadSummaryCard}>
-                  <View style={styles.squadSummaryRow}>
-                    <View style={styles.squadSummaryItem}>
-                      <Text style={styles.squadSummaryLabel}>Jugadores</Text>
-                      <Text style={styles.squadSummaryValue}>{squadPlayers.length}/{SQUAD_LIMIT}</Text>
-                    </View>
-                    <View style={styles.squadSummaryItem}>
-                      <Text style={styles.squadSummaryLabel}>Presupuesto</Text>
-                      <Text style={[styles.squadSummaryValue, budgetLeft < 0 && styles.squadDanger]}>{budgetLeft}M</Text>
-                    </View>
-                    <View style={styles.squadSummaryItem}>
-                      <Text style={styles.squadSummaryLabel}>Puntos est.</Text>
-                      <Text style={styles.squadSummaryValue}>{squadPoints}</Text>
-                    </View>
-                  </View>
-                  <View style={styles.squadProgressTrack}>
-                    <View style={[styles.squadProgressFill, { width: `${Math.min(100, (squadCost / SQUAD_BUDGET) * 100)}%` }]} />
-                  </View>
-                </View>
-
-                {!isPremium && <AdBreak placement="premium" onPress={() => openPaywall('squad-top')} />}
-
-                {squadPlayers.length === 0 ? (
-                  <View style={styles.squadEmptyCard}>
-                    <Text style={styles.squadEmptyTitle}>Construye tu once</Text>
-                    <Text style={styles.squadEmptyText}>Ve a Jugadores y añade hasta 11 nombres sin pasar de 100M.</Text>
-                    <TouchableOpacity onPress={() => switchNav('explore')} activeOpacity={0.8} style={styles.squadPrimaryButton}>
-                      <Text style={styles.squadPrimaryButtonText}>Elegir jugadores</Text>
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  <View style={styles.cardStack}>
-                    {squadPlayers.map((player, index) => {
-                      const isCaptain = captainId === player.id;
-                      return (
-                        <View key={player.id}>
-                          <View style={[styles.squadPlayerRow, isCaptain && styles.squadPlayerRowCaptain]}>
-                            <View style={styles.squadPlayerRank}>
-                              <Text style={styles.squadPlayerRankText}>{index + 1}</Text>
-                            </View>
-                            <View style={styles.squadPlayerInfo}>
-                              <Text style={styles.squadPlayerName}>{player.name}</Text>
-                              <Text style={styles.squadPlayerMeta}>{player.team} · {player.pos} · {getPlayerCost(player)}M</Text>
-                            </View>
-                            <View style={styles.squadPlayerActions}>
-                              <TouchableOpacity onPress={() => setCaptainId(player.id)} activeOpacity={0.8} style={[styles.captainButton, isCaptain && styles.captainButtonActive]}>
-                                <Text style={[styles.captainButtonText, isCaptain && styles.captainButtonTextActive]}>{isCaptain ? 'C' : 'Cap.'}</Text>
-                              </TouchableOpacity>
-                              <Text style={styles.squadPoints}>{getPlayerProjection(player, captainId)}</Text>
-                              <TouchableOpacity onPress={() => toggleSquadPlayer(player)} activeOpacity={0.8} style={styles.removeSquadButton}>
-                                <Text style={styles.removeSquadButtonText}>×</Text>
-                              </TouchableOpacity>
-                            </View>
-                          </View>
-                          {!isPremium && (index + 1) % 2 === 0 && <AdBreak placement="feed" onPress={() => openPaywall('squad-list')} />}
-                        </View>
-                      );
-                    })}
-                  </View>
-                )}
-              </View>
-            )}
             {activeNav === 'profile' && (
               <View>
                 <View style={styles.profileHero}>
                   <Text style={styles.sectionTitle}>PERFIL</Text>
-                  <Text style={styles.profileTitle}>{profile.favoriteTeam}</Text>
+                  <Text style={styles.profileTitle} numberOfLines={1}>{profile.favoriteTeam}</Text>
                   <Text style={styles.profileSubtitle}>{favoriteLeague.label} · {profile.favoritePlayer}</Text>
                 </View>
 
                 <View style={styles.profileStatsRow}>
                   <StatTile label="Monedas" value={`${entitlements.coins}`} />
                   <StatTile label="Plan" value={entitlements.premiumPlan || 'Gratis'} tone={isPremium ? 'gold' : 'neutral'} />
-                  <StatTile label="IA" value={isPremium ? 'Ilimitada' : `${aiUsesLeft} usos`} />
+                  <StatTile label="Alertas" value={`${profile.alertTypes.length}`} />
                 </View>
 
                 {!isPremium && <AdBreak placement="premium" onPress={() => openPaywall('profile-top')} />}
@@ -1531,8 +1655,8 @@ export default function App() {
                 {!isPremium && (
                   <TouchableOpacity activeOpacity={0.8} onPress={() => openPaywall('profile')} style={styles.upgradeCard}>
                     <Text style={styles.upgradeBadge}>Premium</Text>
-                    <Text style={styles.upgradeTitle}>Quita anuncios y desbloquea xG, mapas de calor y IA ilimitada</Text>
-                    <Text style={styles.upgradeMeta}>Mensual, anual y lifetime con oferta limitada.</Text>
+                    <Text style={styles.upgradeTitle}>Quita anuncios y desbloquea estadísticas avanzadas, mapas de calor y alertas rápidas</Text>
+                    <Text style={styles.upgradeMeta}>Pago único de 5,99 EUR. Sin suscripciones.</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -1542,10 +1666,10 @@ export default function App() {
       </ScrollView>
       <Modal visible={showOnboarding} animationType="slide" transparent={true} onRequestClose={() => setShowOnboarding(false)}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, styles.onboardingModal]}>
+          <View style={[styles.modalContent, isWide && styles.modalContentWide, styles.onboardingModal]}>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.onboardingScroll}>
               <Text style={styles.onboardingKicker}>Configuración inicial</Text>
-              <Text style={styles.onboardingTitle}>Personaliza tu futbol</Text>
+              <Text style={styles.onboardingTitle}>Personaliza tu fútbol</Text>
               <Text style={styles.onboardingSubtitle}>Cinco pasos y la home ya se adapta a ti.</Text>
 
               <View style={styles.onboardingProgressTrack}>
@@ -1643,7 +1767,7 @@ export default function App() {
 
       <Modal visible={showPaywall} animationType="slide" transparent={true} onRequestClose={() => setShowPaywall(false)}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, styles.paywallModal]}>
+          <View style={[styles.modalContent, isWide && styles.modalContentWide, styles.paywallModal]}>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.paywallScroll}>
               <Text style={styles.onboardingKicker}>Premium</Text>
               <Text style={styles.onboardingTitle}>Quita anuncios y desbloquea el nivel completo</Text>
@@ -1653,7 +1777,7 @@ export default function App() {
               </Text>
 
               <View style={styles.paywallFeatures}>
-                {['xG completo', 'Mapas de calor', 'Comparador avanzado', 'IA ilimitada', 'Widgets premium', 'Alertas ultra rápidas'].map((feature) => (
+                {['Sin anuncios', 'xG completo', 'Mapas de calor', 'Comparador avanzado', 'Widgets premium', 'Alertas ultra rápidas'].map((feature) => (
                   <View key={feature} style={styles.paywallFeatureRow}>
                     <Text style={styles.paywallFeatureBullet}>•</Text>
                     <Text style={styles.paywallFeatureText}>{feature}</Text>
@@ -1667,13 +1791,13 @@ export default function App() {
                     key={plan.id}
                     plan={plan}
                     onPress={() => purchasePlan(plan.id)}
-                    highlight={plan.id === 'annual'}
+                    highlight={true}
                     disabled={purchaseLoading}
                   />
                 ))}
               </View>
 
-              <TouchableOpacity onPress={() => claimRewardedAd('ai')} disabled={adLoading} activeOpacity={0.8} style={[styles.rewardButton, adLoading && styles.planCardDisabled]}>
+              <TouchableOpacity onPress={() => claimRewardedAd('coins')} disabled={adLoading} activeOpacity={0.8} style={[styles.rewardButton, adLoading && styles.planCardDisabled]}>
                 <Text style={styles.rewardButtonText}>{adLoading ? 'Cargando anuncio...' : 'Ver anuncio y ganar recursos'}</Text>
               </TouchableOpacity>
 
@@ -1689,7 +1813,7 @@ export default function App() {
         </View>
       </Modal>
 
-      <View style={styles.bottomNav}>
+      <View style={[styles.bottomNav, bottomNavWideStyle, isCompact && styles.bottomNavCompact]}>
         {MAIN_NAV.map((item) => (
           <TouchableOpacity
             key={item.id}
@@ -1698,7 +1822,12 @@ export default function App() {
             style={[styles.bottomNavButton, activeNav === item.id && styles.bottomNavButtonActive]}
           >
             <Text style={[styles.bottomNavIcon, activeNav === item.id && styles.bottomNavIconActive]}>{item.icon}</Text>
-            <Text style={[styles.bottomNavText, activeNav === item.id && styles.bottomNavTextActive]}>{item.label}</Text>
+            <Text
+              style={[styles.bottomNavText, isCompact && styles.bottomNavTextCompact, activeNav === item.id && styles.bottomNavTextActive]}
+              numberOfLines={1}
+            >
+              {item.label}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -1710,7 +1839,7 @@ export default function App() {
         onRequestClose={() => setSelectedMatch(null)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, isWide && styles.modalContentWide]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalLeagueTitle}>{selectedMatch?.league?.toUpperCase()}</Text>
               <TouchableOpacity onPress={() => setSelectedMatch(null)} style={styles.closeButton}>
@@ -1728,19 +1857,19 @@ export default function App() {
             {!loadingDetail && (
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalScroll}>
                 {/* Score section */}
-                <View style={styles.modalScoreCard}>
+                <View style={[styles.modalScoreCard, isCompact && styles.modalScoreCardCompact]}>
                   <View style={styles.modalScoreTeam}>
                     <TeamCrest
                       uri={selectedMatch?.homeCrest}
                       fallback={selectedMatch?.homeBadge}
                       color={selectedMatch?.homeColor || COLORS.accent}
-                      size={54}
+                      size={isCompact ? 44 : 54}
                       style={styles.modalTeamBadge}
                     />
-                    <Text style={styles.modalTeamName}>{selectedMatch?.home}</Text>
+                    <Text style={styles.modalTeamName} numberOfLines={2}>{selectedMatch?.home}</Text>
                   </View>
                   <View style={styles.modalScoreBox}>
-                    <Text style={styles.modalScoreText}>
+                    <Text style={[styles.modalScoreText, isCompact && styles.modalScoreTextCompact]}>
                       {selectedMatch?.live || matchDetail?.header?.competitions?.[0]?.status?.type?.completed ? `${selectedMatch?.homeScore} - ${selectedMatch?.awayScore}` : 'vs'}
                     </Text>
                     {selectedMatch?.live && (
@@ -1755,10 +1884,10 @@ export default function App() {
                       uri={selectedMatch?.awayCrest}
                       fallback={selectedMatch?.awayBadge}
                       color={selectedMatch?.awayColor || COLORS.accent}
-                      size={54}
+                      size={isCompact ? 44 : 54}
                       style={styles.modalTeamBadge}
                     />
-                    <Text style={styles.modalTeamName}>{selectedMatch?.away}</Text>
+                    <Text style={[styles.modalTeamName, styles.modalTeamNameRight]} numberOfLines={2}>{selectedMatch?.away}</Text>
                   </View>
                 </View>
 
@@ -1880,6 +2009,42 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.bg,
   },
+  ambientLayer: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+  },
+  ambientGlowTop: {
+    position: 'absolute',
+    top: -90,
+    right: -95,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: '#0c7f5f',
+  },
+  ambientGlowBottom: {
+    position: 'absolute',
+    bottom: 160,
+    left: -120,
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+    backgroundColor: '#12365f',
+  },
+  pitchLine: {
+    position: 'absolute',
+    top: 170,
+    left: -20,
+    right: -20,
+    height: 1,
+    backgroundColor: '#ffffff10',
+    transform: [{ rotate: '-8deg' }],
+  },
+  contentFrame: {
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+  },
   container: {
     paddingBottom: 132,
   },
@@ -1887,15 +2052,32 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 22,
     paddingBottom: 18,
-    backgroundColor: COLORS.bg,
+    backgroundColor: 'transparent',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  headerCompact: {
+    paddingHorizontal: 14,
+    paddingTop: 16,
+    paddingBottom: 14,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexShrink: 0,
+  },
+  headerActionsCompact: {
+    gap: 6,
   },
   brand: {
     fontSize: 30,
     fontWeight: '900',
     color: COLORS.text,
+  },
+  brandCompact: {
+    fontSize: 24,
   },
   brandAccent: {
     color: COLORS.accent,
@@ -1939,6 +2121,9 @@ const styles = StyleSheet.create({
     padding: 4,
     overflow: 'hidden',
   },
+  tabBarCompact: {
+    marginHorizontal: 12,
+  },
   tabButton: {
     flex: 1,
     paddingVertical: 10,
@@ -1962,6 +2147,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: COLORS.muted,
     fontWeight: '700',
+  },
+  tabLabelCompact: {
+    fontSize: 9,
   },
   tabLabelActive: {
     color: COLORS.accent,
@@ -2024,6 +2212,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 16,
   },
+  bodyCompact: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+  },
   sectionTitle: {
     color: COLORS.muted,
     letterSpacing: 1,
@@ -2034,10 +2226,10 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   card: {
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
+    backgroundColor: '#0f1724f2',
+    borderColor: '#2b3850',
     borderWidth: 1,
-    borderRadius: 22,
+    borderRadius: 18,
     padding: 16,
     marginBottom: 10,
     shadowColor: '#000',
@@ -2047,7 +2239,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   cardLive: {
-    borderColor: COLORS.accentGlow,
+    borderColor: '#36e7a866',
     shadowColor: COLORS.accentGlow,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.35,
@@ -2185,6 +2377,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'transparent',
   },
+  teamRowCompact: {
+    gap: 6,
+    paddingHorizontal: 8,
+  },
   teamRowSelected: {
     backgroundColor: COLORS.accentDim,
     borderColor: COLORS.accent,
@@ -2194,6 +2390,10 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
     fontSize: 12,
     fontFamily: 'monospace',
+  },
+  teamPosCompact: {
+    width: 20,
+    fontSize: 11,
   },
   teamName: {
     flex: 1,
@@ -2225,6 +2425,10 @@ const styles = StyleSheet.create({
     gap: 4,
     width: 50,
     justifyContent: 'flex-end',
+  },
+  teamFormaRowCompact: {
+    width: 36,
+    gap: 3,
   },
   formaBullet: {
     width: 8,
@@ -2371,203 +2575,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.text,
   },
-  squadToggleButton: {
-    marginTop: 14,
-    borderRadius: 16,
-    paddingVertical: 11,
-    alignItems: 'center',
-    backgroundColor: COLORS.accent,
-  },
-  squadToggleButtonActive: {
-    backgroundColor: COLORS.cardElevated,
-    borderWidth: 1,
-    borderColor: COLORS.accent,
-  },
-  squadToggleButtonDisabled: {
-    opacity: 0.45,
-  },
-  squadToggleText: {
-    color: COLORS.bg,
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  squadToggleTextActive: {
-    color: COLORS.accent,
-  },
-  squadSummaryCard: {
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
-    borderWidth: 1,
-    borderRadius: 24,
-    padding: 18,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.2,
-    shadowRadius: 24,
-    elevation: 4,
-  },
-  squadSummaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  squadSummaryItem: {
-    flex: 1,
-  },
-  squadSummaryLabel: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: '800',
-    marginBottom: 6,
-  },
-  squadSummaryValue: {
-    color: COLORS.text,
-    fontSize: 22,
-    fontWeight: '900',
-  },
-  squadDanger: {
-    color: COLORS.red,
-  },
-  squadProgressTrack: {
-    height: 8,
-    backgroundColor: COLORS.surface,
-    borderRadius: 999,
-    overflow: 'hidden',
-    marginTop: 16,
-  },
-  squadProgressFill: {
-    height: '100%',
-    backgroundColor: COLORS.accent,
-    borderRadius: 999,
-  },
-  squadEmptyCard: {
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
-    borderWidth: 1,
-    borderRadius: 24,
-    padding: 22,
-    alignItems: 'center',
-  },
-  squadEmptyTitle: {
-    color: COLORS.text,
-    fontSize: 20,
-    fontWeight: '900',
-    marginBottom: 8,
-  },
-  squadEmptyText: {
-    color: COLORS.muted,
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 19,
-    marginBottom: 16,
-  },
-  squadPrimaryButton: {
-    backgroundColor: COLORS.accent,
-    borderRadius: 18,
-    paddingVertical: 12,
-    paddingHorizontal: 18,
-  },
-  squadPrimaryButtonText: {
-    color: COLORS.bg,
-    fontWeight: '900',
-    fontSize: 13,
-  },
-  squadPlayerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
-    borderWidth: 1,
-    borderRadius: 20,
-    padding: 12,
-    gap: 10,
-  },
-  squadPlayerRowCaptain: {
-    borderColor: COLORS.gold,
-    backgroundColor: '#2b2616',
-  },
-  squadPlayerRank: {
-    width: 32,
-    height: 32,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.surface,
-  },
-  squadPlayerRankText: {
-    color: COLORS.muted,
-    fontWeight: '900',
-    fontSize: 12,
-  },
-  squadPlayerInfo: {
-    flex: 1,
-  },
-  squadPlayerName: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '900',
-  },
-  squadPlayerMeta: {
-    color: COLORS.muted,
-    fontSize: 11,
-    marginTop: 3,
-  },
-  squadPlayerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  captainButton: {
-    minWidth: 38,
-    borderRadius: 12,
-    paddingVertical: 7,
-    alignItems: 'center',
-    backgroundColor: COLORS.surface,
-    borderWidth: 1,
-    borderColor: COLORS.cardBorder,
-  },
-  captainButtonActive: {
-    backgroundColor: COLORS.gold,
-    borderColor: COLORS.gold,
-  },
-  captainButtonText: {
-    color: COLORS.muted,
-    fontSize: 11,
-    fontWeight: '900',
-  },
-  captainButtonTextActive: {
-    color: COLORS.bg,
-  },
-  squadPoints: {
-    minWidth: 34,
-    color: COLORS.accent,
-    fontSize: 16,
-    fontWeight: '900',
-    textAlign: 'right',
-  },
-  removeSquadButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.surface,
-  },
-  removeSquadButtonText: {
-    color: COLORS.red,
-    fontSize: 20,
-    fontWeight: '900',
-    lineHeight: 22,
-  },
   statTile: {
     flex: 1,
     minWidth: '48%',
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
+    backgroundColor: '#0d1420',
+    borderColor: '#263246',
     borderWidth: 1,
-    borderRadius: 18,
-    padding: 14,
+    borderRadius: 14,
+    padding: 13,
   },
   statTileAccent: {
     borderColor: COLORS.accent,
@@ -2587,6 +2602,42 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontSize: 20,
     fontWeight: '900',
+  },
+  insightRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 14,
+  },
+  insightPill: {
+    flexGrow: 1,
+    minWidth: '30%',
+    backgroundColor: COLORS.surface,
+    borderColor: COLORS.cardBorder,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  insightPillAccent: {
+    backgroundColor: COLORS.accentDim,
+    borderColor: COLORS.accent,
+  },
+  insightPillGold: {
+    backgroundColor: '#2b2616',
+    borderColor: COLORS.gold,
+  },
+  insightPillLabel: {
+    color: COLORS.muted,
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  insightPillValue: {
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: '900',
+    marginTop: 4,
   },
   adBanner: {
     backgroundColor: '#151b27',
@@ -2702,15 +2753,15 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   planCard: {
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
+    backgroundColor: '#101927',
+    borderColor: '#2f4058',
     borderWidth: 1,
-    borderRadius: 22,
-    padding: 18,
+    borderRadius: 18,
+    padding: 20,
   },
   planCardHighlight: {
     borderColor: COLORS.accent,
-    backgroundColor: COLORS.accentDim,
+    backgroundColor: '#0b332d',
   },
   planCardDisabled: {
     opacity: 0.55,
@@ -2732,7 +2783,7 @@ const styles = StyleSheet.create({
   },
   planPrice: {
     color: COLORS.text,
-    fontSize: 26,
+    fontSize: 30,
     fontWeight: '900',
     marginTop: 10,
   },
@@ -2775,19 +2826,29 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   homeHero: {
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
+    backgroundColor: '#0f1826f5',
+    borderColor: '#3c536f',
     borderWidth: 1,
-    borderRadius: 24,
-    padding: 18,
+    borderRadius: 22,
+    padding: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
+    elevation: 5,
+  },
+  homeHeroCopy: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 12,
   },
   homeEyebrow: {
-    color: COLORS.muted,
+    color: COLORS.accent,
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '900',
     textTransform: 'uppercase',
   },
   homeTitle: {
@@ -2796,10 +2857,44 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginTop: 6,
   },
+  homeTitleCompact: {
+    fontSize: 24,
+  },
   homeSubtitle: {
     color: COLORS.muted,
     fontSize: 12,
     marginTop: 4,
+  },
+  homeHeroMatchStrip: {
+    marginTop: 16,
+    alignSelf: 'flex-start',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#ffffff18',
+    backgroundColor: '#05070c7a',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  homeHeroTeams: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  homeHeroVs: {
+    alignItems: 'center',
+    minWidth: 64,
+  },
+  homeHeroVsText: {
+    color: COLORS.text,
+    fontSize: 15,
+    fontWeight: '900',
+    fontFamily: 'monospace',
+  },
+  homeHeroVsMeta: {
+    color: COLORS.accent,
+    fontSize: 8,
+    fontWeight: '900',
+    marginTop: 2,
   },
   homeHeroBadge: {
     minWidth: 74,
@@ -2808,7 +2903,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.accentDim,
     borderColor: COLORS.accent,
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 14,
     paddingVertical: 12,
     paddingHorizontal: 14,
   },
@@ -2829,10 +2924,10 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   homeFeatureCard: {
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
+    backgroundColor: '#0f1724',
+    borderColor: '#2d3a50',
     borderWidth: 1,
-    borderRadius: 24,
+    borderRadius: 18,
     padding: 18,
   },
   featureMatchRow: {
@@ -2866,21 +2961,30 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   homeAction: {
+    flex: 1,
     backgroundColor: COLORS.accent,
     borderRadius: 16,
     paddingHorizontal: 16,
     paddingVertical: 12,
+    alignItems: 'center',
   },
   homeActionSecondary: {
+    flex: 1,
     backgroundColor: COLORS.surface,
     borderRadius: 16,
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderWidth: 1,
     borderColor: COLORS.cardBorder,
+    alignItems: 'center',
   },
   homeActionText: {
     color: COLORS.bg,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  homeActionSecondaryText: {
+    color: COLORS.text,
     fontSize: 12,
     fontWeight: '900',
   },
@@ -2890,10 +2994,10 @@ const styles = StyleSheet.create({
   },
   homeModuleCard: {
     flex: 1,
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
+    backgroundColor: '#101722',
+    borderColor: '#28364d',
     borderWidth: 1,
-    borderRadius: 20,
+    borderRadius: 16,
     padding: 16,
   },
   homeModuleTitle: {
@@ -2918,16 +3022,34 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   homeSectionCard: {
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
+    backgroundColor: '#111a29',
+    borderColor: '#2f4058',
     borderWidth: 1,
-    borderRadius: 22,
+    borderRadius: 18,
     padding: 16,
   },
   homeSectionLead: {
     color: COLORS.text,
     fontSize: 13,
     lineHeight: 19,
+    marginTop: 6,
+  },
+  webInstallCard: {
+    backgroundColor: '#0d1f1b',
+    borderColor: COLORS.accent,
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 16,
+  },
+  webInstallTitle: {
+    color: COLORS.accent,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  webInstallText: {
+    color: COLORS.text,
+    fontSize: 12,
+    lineHeight: 18,
     marginTop: 6,
   },
   homeCommunityCard: {
@@ -3208,6 +3330,13 @@ const styles = StyleSheet.create({
     width: 36,
     textAlign: 'center',
   },
+  tableHeaderForma: {
+    width: 50,
+    textAlign: 'right',
+  },
+  tableHeaderCenterCompact: {
+    width: 30,
+  },
   bottomNav: {
     position: 'absolute',
     left: 16,
@@ -3227,10 +3356,20 @@ const styles = StyleSheet.create({
     shadowRadius: 22,
     elevation: 8,
   },
+  bottomNavCompact: {
+    left: 10,
+    right: 10,
+    bottom: 10,
+    paddingHorizontal: 4,
+    paddingVertical: 8,
+  },
   bottomNavText: {
     color: COLORS.muted,
     fontSize: 10,
     fontWeight: '800',
+  },
+  bottomNavTextCompact: {
+    fontSize: 9,
   },
   bottomNavTextActive: {
     color: COLORS.text,
@@ -3277,12 +3416,17 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: COLORS.bg,
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
+    backgroundColor: '#070b12',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
     height: '85%',
     borderWidth: 1,
-    borderColor: COLORS.cardBorder,
+    borderColor: '#2f4058',
+  },
+  modalContentWide: {
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -3331,10 +3475,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.cardBorder,
+    backgroundColor: '#0f1724',
+    borderColor: '#2d3a50',
     borderWidth: 1,
-    borderRadius: 26,
+    borderRadius: 20,
     padding: 20,
     marginBottom: 20,
     shadowColor: '#000',
@@ -3342,6 +3486,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 24,
     elevation: 5,
+  },
+  modalScoreCardCompact: {
+    padding: 14,
+    borderRadius: 22,
   },
   modalScoreTeam: {
     flex: 1.2,
@@ -3358,6 +3506,9 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
   },
+  modalTeamNameRight: {
+    textAlign: 'right',
+  },
   modalScoreBox: {
     flex: 1,
     alignItems: 'center',
@@ -3368,6 +3519,9 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '900',
     fontFamily: 'monospace',
+  },
+  modalScoreTextCompact: {
+    fontSize: 22,
   },
   modalLiveIndicator: {
     color: COLORS.live,

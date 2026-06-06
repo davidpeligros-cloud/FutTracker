@@ -2,29 +2,29 @@
 
 ## Nombre
 
-FútbolLive
+FutTracker
 
-## Subtítulo corto
+## Subtitulo corto
 
-Resultados, Mi XI y fútbol en directo
+Resultados y futbol en directo
 
-## Descripción corta
+## Descripcion corta
 
-Sigue partidos en directo, competiciones, equipos, jugadores, alertas y tu propio Mi XI en una app moderna de fútbol.
+Sigue partidos en directo, competiciones, equipos, jugadores y alertas en una app moderna de futbol.
 
-## Descripción larga
+## Descripcion larga
 
-FútbolLive reúne resultados en directo, calendario de partidos, competiciones, equipos, jugadores y una experiencia personalizada para seguir tu fútbol cada día.
+FutTracker reune resultados en directo, calendario de partidos, competiciones, equipos, jugadores y una experiencia personalizada para seguir tu futbol cada dia.
 
-Elige tu equipo, liga, selección y jugador favorito para adaptar la Home a tus intereses. Consulta partidos en directo, próximos encuentros, clasificación, jugadores destacados y construye tu Mi XI con presupuesto y puntos estimados.
+Elige tu equipo, liga, seleccion y jugador favorito para adaptar la Home a tus intereses. Consulta partidos en directo, proximos encuentros, clasificacion y jugadores destacados con una experiencia rapida y clara.
 
-La app incluye experiencia gratuita con anuncios y una opción Premium para eliminar publicidad y desbloquear funciones avanzadas como estadísticas profundas, comparadores, IA, mapas de calor y alertas premium cuando estén disponibles.
+La app incluye experiencia gratuita con anuncios y una opcion Premium de pago unico para eliminar publicidad y desbloquear funciones avanzadas como estadisticas profundas, comparadores, mapas de calor y alertas premium cuando esten disponibles.
 
 ## Palabras clave
 
-fútbol, resultados, marcador, partidos en directo, calendario, equipos, jugadores, mundial, liga, champions, Mi XI
+futbol, resultados, marcador, partidos en directo, calendario, equipos, jugadores, mundial, liga, champions
 
-## Categoría
+## Categoria
 
 Deportes
 
@@ -34,13 +34,13 @@ Deportes
 - Partido en directo.
 - Calendario con anuncios integrados.
 - Equipos y colores.
-- Mi XI.
+- Jugadores destacados.
 - Perfil Premium.
 
 ## Pendiente antes de publicar
 
-- Email público de soporte.
-- URL pública de política de privacidad.
+- Email publico de soporte.
+- URL publica de politica de privacidad.
 - Capturas reales del APK final.
 - Icono final revisado en Play Console.
-- Clasificación de contenido completada.
+- Clasificacion de contenido completada.

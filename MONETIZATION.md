@@ -1,6 +1,15 @@
 # Monetizacion
 
-La app ya tiene una capa preparada para RevenueCat y Google AdMob.
+La app tiene una capa preparada para Google AdMob y Premium mediante RevenueCat.
+
+## Modelo actual
+
+FutTracker usa un modelo simple:
+
+- Gratis: resultados, calendario, equipos, jugadores, favoritos, alertas y anuncios.
+- Premium: pago unico de 5,99 EUR para quitar anuncios y desbloquear funciones avanzadas.
+- Sin suscripciones mensuales.
+- Sin modos competitivos de ventaja pagada ni mecanicas pay-to-win.
 
 ## Modo desarrollo
 
@@ -20,36 +29,31 @@ EXPO_PUBLIC_ADMOB_ANDROID_APP_ID=ca-app-pub-xxxxxxxxxxxxxxxx~xxxxxxxxxx
 
 Configura un entitlement llamado `premium` o cambia `EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID`.
 
-Productos recomendados:
+Producto recomendado:
 
-- `monthly`: suscripcion mensual.
-- `annual`: suscripcion anual.
-- `lifetime`: compra unica de lanzamiento.
+- `lifetime`: compra unica de 5,99 EUR.
 
-La app intenta comprar el paquete cuyo identificador contiene `monthly`, `annual` o `lifetime`.
+La app intenta comprar el paquete cuyo identificador contiene `lifetime`.
 
 ## AdMob
 
 La app usa:
 
 - Banners en zonas seguras como Home, Calendario y Equipos.
-- Banners repetidos en listas de partidos, equipos, jugadores, competiciones y Mi XI.
+- Banners repetidos en listas de partidos, equipos, jugadores y competiciones.
 - Interstitials al cambiar de seccion, abrir partidos o cambiar competiciones, con cooldown para no bloquear cada toque.
 - Rewarded ads para monedas y recursos.
 - Premium elimina todos los banners, interstitials y pausas patrocinadas.
 
+## Web
+
+La version web usa un fallback visual de anuncios. AdMob real funciona en Android/iOS nativo, no en la web exportada para Netlify.
+
 ## Probar en build nativa
 
-```bash
-npm run build:dev:android
-npm run start:dev
-```
-
-Para iOS:
-
-```bash
-npm run build:dev:ios
-npm run start:dev
+```powershell
+npm.cmd run build:dev:android
+npm.cmd run start:dev
 ```
 
 Expo Go no ejecuta AdMob real. RevenueCat puede previsualizar flujos, pero las compras reales necesitan development build.
