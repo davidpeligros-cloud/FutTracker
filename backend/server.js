@@ -30,6 +30,11 @@ const jsonHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
+function sendJson(response, statusCode, payload) {
+  response.writeHead(statusCode, jsonHeaders);
+  response.end(JSON.stringify(payload));
+}
+
 async function ensureDataDir() {
   await mkdir(DATA_DIR, { recursive: true });
 }
@@ -199,37 +204,38 @@ const server = createServer(async (request, response) => {
   }
 
   try {
-    if (request.method === 'GET' && request.url === '/health') {
+    if (request.method === 'GET' && (request.url === '/' || request.url === '/health')) {
       const subscriptions = await readJson(SUBSCRIPTIONS_FILE, {});
-      response.writeHead(200, jsonHeaders);
-      response.end(JSON.stringify({ ok: true, subscriptions: Object.keys(subscriptions).length }));
+      sendJson(response, 200, {
+        ok: true,
+        app: 'FutTracker push backend',
+        subscriptions: Object.keys(subscriptions).length,
+        uptime: Math.round(process.uptime()),
+      });
       return;
     }
 
     if (request.method === 'POST' && request.url === '/register') {
       const result = await registerSubscription(await readBody(request));
-      response.writeHead(result.ok ? 200 : 400, jsonHeaders);
-      response.end(JSON.stringify(result));
+      sendJson(response, result.ok ? 200 : 400, result);
       return;
     }
 
     if (request.method === 'POST' && request.url === '/poll') {
       const result = await pollScores();
-      response.writeHead(200, jsonHeaders);
-      response.end(JSON.stringify({ ok: true, ...result }));
+      sendJson(response, 200, { ok: true, ...result });
       return;
     }
 
-    response.writeHead(404, jsonHeaders);
-    response.end(JSON.stringify({ ok: false, error: 'Not found' }));
+    sendJson(response, 404, { ok: false, error: 'Not found' });
   } catch (error) {
-    response.writeHead(500, jsonHeaders);
-    response.end(JSON.stringify({ ok: false, error: error.message }));
+    console.error('Request failed:', error);
+    sendJson(response, 500, { ok: false, error: error.message });
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`FutTracker push backend running on port ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`FutTracker push backend running on 0.0.0.0:${PORT}`);
   pollScores().catch((error) => console.error('Initial poll failed:', error));
   setInterval(() => {
     pollScores()
